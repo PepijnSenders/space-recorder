@@ -12,6 +12,7 @@ mod cache;
 mod client;
 mod overlay;
 mod prompt;
+mod retry;
 mod video_replacement;
 
 pub use cache::{CacheEntry, VideoCache};
