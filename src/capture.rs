@@ -5,6 +5,46 @@
 
 use std::process::{Command, Stdio};
 
+/// Generic device finder that handles index-based and name-based device lookup.
+///
+/// This centralizes the common pattern of:
+/// 1. Try to parse as index
+/// 2. Try case-insensitive substring match
+/// 3. Try exact name match
+///
+/// # Arguments
+/// * `device_spec` - The device specifier (index as string or name/partial name)
+/// * `devices` - List of available devices to search through
+///
+/// # Returns
+/// * `Some(name)` - The matched device name
+/// * `None` - No matching device found
+fn find_device_by_spec(device_spec: &str, devices: &[DeviceInfo]) -> Option<String> {
+    // Try to parse as index first
+    if let Ok(index) = device_spec.parse::<usize>() {
+        if index < devices.len() {
+            return Some(devices[index].name.clone());
+        }
+        return None;
+    }
+
+    // Try to match by name (case-insensitive contains)
+    for device in devices {
+        if device.name.to_lowercase().contains(&device_spec.to_lowercase()) {
+            return Some(device.name.clone());
+        }
+    }
+
+    // Try exact match
+    for device in devices {
+        if device.name == *device_spec {
+            return Some(device.name.clone());
+        }
+    }
+
+    None
+}
+
 /// Represents a webcam capture configuration
 #[derive(Debug, Clone)]
 pub struct WebcamCapture {
@@ -76,7 +116,7 @@ impl WebcamCapture {
 
         // Filter to only camera devices (not screens)
         let cameras: Vec<_> = devices
-            .iter()
+            .into_iter()
             .filter(|d| !d.name.starts_with("Capture screen"))
             .collect();
 
@@ -86,35 +126,11 @@ impl WebcamCapture {
 
         match &self.device {
             Some(device_spec) => {
-                // Try to parse as index first
-                if let Ok(index) = device_spec.parse::<usize>() {
-                    // Find camera at this index
-                    if index >= cameras.len() {
-                        return Err(CaptureError::WebcamNotFound {
-                            requested: device_spec.clone(),
-                            available: cameras.iter().map(|d| d.name.clone()).collect(),
-                        });
+                find_device_by_spec(device_spec, &cameras).ok_or_else(|| {
+                    CaptureError::WebcamNotFound {
+                        requested: device_spec.clone(),
+                        available: cameras.iter().map(|d| d.name.clone()).collect(),
                     }
-                    return Ok(cameras[index].name.clone());
-                }
-
-                // Try to match by name (case-insensitive contains)
-                for camera in &cameras {
-                    if camera.name.to_lowercase().contains(&device_spec.to_lowercase()) {
-                        return Ok(camera.name.clone());
-                    }
-                }
-
-                // Exact match attempt
-                for camera in &cameras {
-                    if camera.name == *device_spec {
-                        return Ok(camera.name.clone());
-                    }
-                }
-
-                Err(CaptureError::WebcamNotFound {
-                    requested: device_spec.clone(),
-                    available: cameras.iter().map(|d| d.name.clone()).collect(),
                 })
             }
             None => {
@@ -348,34 +364,11 @@ impl AudioCapture {
 
         match &self.device {
             Some(device_spec) => {
-                // Try to parse as index first
-                if let Ok(index) = device_spec.parse::<usize>() {
-                    if index >= devices.len() {
-                        return Err(CaptureError::AudioDeviceNotFound {
-                            requested: device_spec.clone(),
-                            available: devices.iter().map(|d| d.name.clone()).collect(),
-                        });
+                find_device_by_spec(device_spec, &devices).ok_or_else(|| {
+                    CaptureError::AudioDeviceNotFound {
+                        requested: device_spec.clone(),
+                        available: devices.iter().map(|d| d.name.clone()).collect(),
                     }
-                    return Ok(devices[index].name.clone());
-                }
-
-                // Try to match by name (case-insensitive contains)
-                for device in &devices {
-                    if device.name.to_lowercase().contains(&device_spec.to_lowercase()) {
-                        return Ok(device.name.clone());
-                    }
-                }
-
-                // Exact match attempt
-                for device in &devices {
-                    if device.name == *device_spec {
-                        return Ok(device.name.clone());
-                    }
-                }
-
-                Err(CaptureError::AudioDeviceNotFound {
-                    requested: device_spec.clone(),
-                    available: devices.iter().map(|d| d.name.clone()).collect(),
                 })
             }
             None => {
@@ -1903,5 +1896,67 @@ mod tests {
         sorted_apps.sort();
         sorted_apps.dedup();
         assert_eq!(apps, sorted_apps, "List should be sorted and deduplicated");
+    }
+
+    // Tests for the generic device finder
+
+    #[test]
+    fn test_find_device_by_spec_index() {
+        let devices = vec![
+            DeviceInfo { index: 0, name: "Device A".to_string() },
+            DeviceInfo { index: 1, name: "Device B".to_string() },
+            DeviceInfo { index: 2, name: "Device C".to_string() },
+        ];
+
+        assert_eq!(find_device_by_spec("0", &devices), Some("Device A".to_string()));
+        assert_eq!(find_device_by_spec("1", &devices), Some("Device B".to_string()));
+        assert_eq!(find_device_by_spec("2", &devices), Some("Device C".to_string()));
+        assert_eq!(find_device_by_spec("3", &devices), None); // Out of bounds
+    }
+
+    #[test]
+    fn test_find_device_by_spec_case_insensitive() {
+        let devices = vec![
+            DeviceInfo { index: 0, name: "FaceTime HD Camera".to_string() },
+            DeviceInfo { index: 1, name: "USB Webcam".to_string() },
+        ];
+
+        // Lowercase match
+        assert_eq!(find_device_by_spec("facetime", &devices), Some("FaceTime HD Camera".to_string()));
+        // Uppercase match
+        assert_eq!(find_device_by_spec("WEBCAM", &devices), Some("USB Webcam".to_string()));
+        // Mixed case match
+        assert_eq!(find_device_by_spec("FaCeTiMe", &devices), Some("FaceTime HD Camera".to_string()));
+    }
+
+    #[test]
+    fn test_find_device_by_spec_exact_match() {
+        let devices = vec![
+            DeviceInfo { index: 0, name: "Device".to_string() },
+            DeviceInfo { index: 1, name: "Device Pro".to_string() },
+        ];
+
+        // Exact match should work
+        assert_eq!(find_device_by_spec("Device", &devices), Some("Device".to_string()));
+        // Substring match returns first hit
+        assert_eq!(find_device_by_spec("vice", &devices), Some("Device".to_string()));
+    }
+
+    #[test]
+    fn test_find_device_by_spec_no_match() {
+        let devices = vec![
+            DeviceInfo { index: 0, name: "Device A".to_string() },
+            DeviceInfo { index: 1, name: "Device B".to_string() },
+        ];
+
+        assert_eq!(find_device_by_spec("NonExistent", &devices), None);
+    }
+
+    #[test]
+    fn test_find_device_by_spec_empty_list() {
+        let devices: Vec<DeviceInfo> = vec![];
+
+        assert_eq!(find_device_by_spec("0", &devices), None);
+        assert_eq!(find_device_by_spec("anything", &devices), None);
     }
 }
