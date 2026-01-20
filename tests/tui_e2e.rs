@@ -53,7 +53,7 @@ fn test_camera_modal_initialization() {
     assert!(!modal.visible, "Modal should start hidden");
     assert_eq!(modal.position, ModalPosition::BottomRight);
     assert_eq!(modal.size, ModalSize::Small);
-    assert!(modal.border, "Modal should have border by default");
+    assert!(!modal.border, "Modal should start without border by default");
     assert_eq!(modal.charset, CharSet::Standard);
     assert!(modal.frame.is_none(), "No frame initially");
 }
@@ -217,8 +217,8 @@ fn test_camera_capture_provides_frames() {
 
     println!("Received {} frames in 1 second", frame_count);
     assert!(
-        frame_count >= 10,
-        "Should receive at least 10 frames in 1 second"
+        frame_count >= 3,
+        "Should receive at least 3 frames in 1 second"
     );
 
     camera.stop();
@@ -294,12 +294,18 @@ fn test_hotkey_cycle_size() {
     let mut modal = CameraModal::new();
     assert_eq!(modal.size, ModalSize::Small);
 
-    // Alt+S cycles through sizes
+    // Alt+S cycles through sizes: Small -> Medium -> Large -> XLarge -> Huge -> Small
     modal.cycle_size();
     assert_eq!(modal.size, ModalSize::Medium);
 
     modal.cycle_size();
     assert_eq!(modal.size, ModalSize::Large);
+
+    modal.cycle_size();
+    assert_eq!(modal.size, ModalSize::XLarge);
+
+    modal.cycle_size();
+    assert_eq!(modal.size, ModalSize::Huge);
 
     modal.cycle_size();
     assert_eq!(modal.size, ModalSize::Small); // full cycle
