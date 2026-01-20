@@ -1,29 +1,16 @@
 [package]
 name = "space-recorder"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
-toml = "0.8"
-thiserror = "2"
-log = "0.4"
-ctrlc = "3"
-rdev = "0.5"
-# v2: fal.ai integration
-reqwest = { version = "0.12", features = ["json", "stream"] }
-futures-util = "0.3"
-sha2 = "0.10"
-hex = "0.4"
-dirs = "5"
+ratatui = "0.28"
+crossterm = { version = "0.28", features = ["event-stream"] }
+futures = "0.3"
+portable-pty = "0.8"
 tokio = { version = "1", features = ["full"] }
-dotenv = "0.15"
-
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
-[dev-dependencies]
-serde_json = "1"
-tempfile = "3"
-wiremock = "0.6"
+clap = { version = "4", features = ["derive"] }
+nokhwa = { version = "0.10", features = ["input-avfoundation"] }
+directories = "5"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }

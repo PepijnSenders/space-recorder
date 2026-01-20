@@ -1,915 +1,105 @@
-mod capture;
+//! space-recorder: TUI app that renders webcam as ASCII art overlay while hosting a shell
+
+use clap::Parser;
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
+use futures::StreamExt;
+use std::io::{Read, Write};
+use std::time::Duration;
+use tokio::sync::mpsc;
+
+mod ascii;
+mod camera;
+mod cli;
 mod config;
-mod devices;
-mod effects;
-mod fal;
-mod hotkeys;
-mod permissions;
-mod pipeline;
-mod pipeline_config;
-
-use capture::{AudioCapture, CaptureError, ScreenCapture, WebcamCapture, WindowCapture};
-use clap::{Parser, Subcommand};
-use effects::VideoEffect;
-use pipeline_config::{OutputMode, PipelineConfig};
-use hotkeys::HotkeyManager;
-use pipeline::{setup_ctrlc_handler, Pipeline, PipelineError};
-use std::process::{Command, Stdio};
-
-/// Parse and validate volume (0.0-2.0)
-fn parse_volume(s: &str) -> Result<f32, String> {
-    let vol: f32 = s.parse().map_err(|_| format!("'{}' is not a valid number", s))?;
-    if !(0.0..=2.0).contains(&vol) {
-        return Err(format!("Volume must be between 0.0 and 2.0, got {}", vol));
-    }
-    Ok(vol)
-}
-
-/// Parse and validate opacity (0.0-1.0)
-fn parse_opacity(s: &str) -> Result<f32, String> {
-    let opacity: f32 = s.parse().map_err(|_| format!("'{}' is not a valid number", s))?;
-    if !(0.0..=1.0).contains(&opacity) {
-        return Err(format!("Opacity must be between 0.0 and 1.0, got {}", opacity));
-    }
-    Ok(opacity)
-}
-
-/// Parse video effect preset
-fn parse_effect(s: &str) -> Result<VideoEffect, String> {
-    VideoEffect::from_str(s).ok_or_else(|| {
-        format!(
-            "Unknown effect '{}'. Available effects: none, cyberpunk, dark_mode",
-            s
-        )
-    })
-}
-
-/// Parse and validate resolution (WIDTHxHEIGHT format)
-fn parse_resolution(s: &str) -> Result<(u32, u32), String> {
-    let parts: Vec<&str> = s.split('x').collect();
-    if parts.len() != 2 {
-        return Err(format!(
-            "Invalid resolution format '{}'. Use WIDTHxHEIGHT (e.g., 1920x1080)",
-            s
-        ));
-    }
-    let width: u32 = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid width '{}' in resolution", parts[0]))?;
-    let height: u32 = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid height '{}' in resolution", parts[1]))?;
-    if width == 0 || height == 0 {
-        return Err("Resolution width and height must be greater than 0".to_string());
-    }
-    if width > 7680 || height > 4320 {
-        return Err("Resolution exceeds maximum supported (7680x4320)".to_string());
-    }
-    Ok((width, height))
-}
-
-/// Parse and validate framerate (1-120 fps)
-fn parse_framerate(s: &str) -> Result<u32, String> {
-    let fps: u32 = s
-        .parse()
-        .map_err(|_| format!("'{}' is not a valid framerate", s))?;
-    if !(1..=120).contains(&fps) {
-        return Err(format!(
-            "Framerate must be between 1 and 120 fps, got {}",
-            fps
-        ));
-    }
-    Ok(fps)
-}
-
-/// Parse and validate noise gate threshold (0.0-1.0)
-fn parse_noise_gate_threshold(s: &str) -> Result<f32, String> {
-    let threshold: f32 = s.parse().map_err(|_| format!("'{}' is not a valid number", s))?;
-    if !(0.0..=1.0).contains(&threshold) {
-        return Err(format!("Noise gate threshold must be between 0.0 and 1.0, got {}", threshold));
-    }
-    Ok(threshold)
-}
-
-/// space-recorder: Video compositor for coding streams
-#[derive(Parser)]
-#[command(name = "space-recorder")]
-#[command(version, about = "Video compositor for coding streams")]
-#[command(long_about = "Composite terminal windows with a ghostly webcam overlay for \
-    screen sharing in video calls. Supports visual effects, text overlays, \
-    and real-time opacity control via hotkeys.")]
-#[command(after_help = "EXAMPLES:
-    # Start with Terminal window capture
-    space-recorder start --window Terminal
-
-    # Custom opacity and cyberpunk effect
-    space-recorder start -W Terminal -o 0.4 -e cyberpunk
-
-    # Full screen capture with LIVE badge
-    space-recorder start --screen 0 --live
-
-    # Screen only, no webcam
-    space-recorder start --no-webcam
-
-    # Enable fal.ai overlay mode (type prompts during stream)
-    space-recorder start --fal --window Terminal
-
-    # Pre-generate AI video before streaming
-    space-recorder fal-generate \"cyberpunk cityscape\"
-
-    # List available devices
-    space-recorder list-devices
-
-For more information, see: https://github.com/username/space-recorder")]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// List available video and audio capture devices
-    #[command(after_help = "EXAMPLES:
-    space-recorder list-devices          # List all devices
-    space-recorder list-devices --video  # List only video devices
-    space-recorder list-devices --audio  # List only audio devices")]
-    ListDevices {
-        /// Show only video devices (cameras and screens)
-        #[arg(long)]
-        video: bool,
-        /// Show only audio devices (microphones)
-        #[arg(long)]
-        audio: bool,
-    },
-
-    /// Manage fal.ai video cache
-    #[command(after_help = "EXAMPLES:
-    space-recorder fal-cache list        # List all cached videos
-    space-recorder fal-cache clear       # Remove all cached videos
-    space-recorder fal-cache clear abc123  # Remove specific cached video by hash")]
-    FalCache {
-        #[command(subcommand)]
-        action: FalCacheAction,
-    },
-
-    /// Pre-generate AI video from a text prompt
-    ///
-    /// Generates a video using fal.ai and caches it locally.
-    /// Useful for pre-warming the cache before starting a stream.
-    #[command(after_help = "EXAMPLES:
-    space-recorder fal-generate \"cyberpunk cityscape\"
-    space-recorder fal-generate \"abstract particles flowing\"
-    space-recorder fal-generate --batch prompts.txt
-
-ENVIRONMENT:
-    FAL_API_KEY    Required. Your fal.ai API key.")]
-    FalGenerate {
-        /// The text prompt describing the video to generate
-        #[arg(required_unless_present = "batch")]
-        prompt: Option<String>,
-
-        /// Path to a file containing prompts (one per line) for batch generation
-        #[arg(long, short = 'b', conflicts_with = "prompt")]
-        batch: Option<std::path::PathBuf>,
-    },
-
-    /// Start the compositor and preview in mpv
-    #[command(after_help = "EXAMPLES:
-    # Capture Terminal window with default settings
-    space-recorder start --window Terminal
-
-    # Custom opacity (40%) with cyberpunk color grading
-    space-recorder start -W Code -o 0.4 -e cyberpunk
-
-    # Full screen capture with LIVE badge and timestamp
-    space-recorder start --screen 0 --live --timestamp
-
-    # Disable webcam for screen-only capture
-    space-recorder start --no-webcam --vignette
-
-    # Enable audio processing
-    space-recorder start -W Terminal --noise-gate --compressor
-
-    # Enable fal.ai overlay mode (type prompts during stream)
-    space-recorder start --fal -W Terminal
-
-    # fal.ai mode with custom AI overlay opacity
-    space-recorder start --fal --fal-opacity 0.5 -W Terminal
-
-HOTKEYS (while running):
-    +/=    Increase ghost opacity
-    -      Decrease ghost opacity
-    Ctrl+C Quit
-
-FAL.AI COMMANDS (when --fal is enabled):
-    <prompt>     Generate and overlay AI video from text prompt
-    /clear       Remove current AI video overlay
-    /opacity N   Set AI overlay opacity (0.0-1.0)")]
-    Start {
-        /// Capture specific window by application name (e.g., "Terminal", "Code")
-        /// Overrides full-screen capture
-        #[arg(long, short = 'W')]
-        window: Option<String>,
-
-        /// Screen device index to capture (default: auto-detect first screen)
-        #[arg(long, short = 's')]
-        screen: Option<usize>,
-
-        /// Webcam device to use (by name or index, auto-detects if not specified)
-        #[arg(long, short = 'w')]
-        webcam: Option<String>,
-
-        /// Disable webcam capture
-        #[arg(long)]
-        no_webcam: bool,
-
-        /// Mirror (horizontally flip) the webcam
-        #[arg(long)]
-        mirror: bool,
-
-        /// Ghost overlay opacity (0.0 = invisible, 1.0 = fully visible)
-        /// Default: 0.3 (or from config file)
-        #[arg(long, short = 'o', value_parser = parse_opacity)]
-        opacity: Option<f32>,
-
-        /// Audio volume level (0.0 = mute, 1.0 = normal, 2.0 = double)
-        /// Default: 1.0 (or from config file)
-        #[arg(long, short = 'v', value_parser = parse_volume)]
-        volume: Option<f32>,
-
-        /// Disable audio capture
-        #[arg(long)]
-        no_audio: bool,
-
-        /// Video effect preset to apply to webcam (none, cyberpunk, dark_mode)
-        /// Default: none (or from config file)
-        #[arg(long, short = 'e', value_parser = parse_effect)]
-        effect: Option<VideoEffect>,
-
-        /// Disable all video effects (overrides --effect)
-        #[arg(long)]
-        no_effects: bool,
-
-        /// Enable vignette effect (subtle darkening around frame edges)
-        /// Default: on when any effect is enabled, off when --no-effects is used
-        #[arg(long)]
-        vignette: bool,
-
-        /// Disable vignette effect (overrides default vignette with effects)
-        #[arg(long)]
-        no_vignette: bool,
-
-        /// Enable film grain effect (subtle noise texture for cinematic look)
-        #[arg(long)]
-        grain: bool,
-
-        /// Enable noise gate to reduce background noise when not speaking
-        #[arg(long)]
-        noise_gate: bool,
-
-        /// Noise gate threshold (0.0-1.0, default 0.01). Lower = more aggressive gating.
-        #[arg(long, value_parser = parse_noise_gate_threshold)]
-        noise_gate_threshold: Option<f32>,
-
-        /// Enable compressor to even out volume levels and prevent clipping
-        #[arg(long)]
-        compressor: bool,
-
-        /// Show LIVE badge overlay (red badge with white text at top-left)
-        #[arg(long)]
-        live: bool,
-
-        /// Hide LIVE badge overlay (overrides --live)
-        #[arg(long)]
-        no_live_badge: bool,
-
-        /// Show timestamp overlay (HH:MM:SS at top-right, updates in real-time)
-        #[arg(long)]
-        timestamp: bool,
-
-        /// Hide timestamp overlay (overrides --timestamp)
-        #[arg(long)]
-        no_timestamp: bool,
-
-        /// Output file path for recording (e.g., recording.mp4)
-        /// When specified, records to file in addition to preview
-        #[arg(long, short = 'O')]
-        output: Option<String>,
-
-        /// Output resolution (WIDTHxHEIGHT, e.g., 1920x1080)
-        /// Defaults to 1280x720 if not specified
-        #[arg(long, short = 'r', value_parser = parse_resolution)]
-        resolution: Option<(u32, u32)>,
-
-        /// Output framerate (1-120 fps, default: 30)
-        #[arg(long, short = 'f', value_parser = parse_framerate)]
-        framerate: Option<u32>,
-
-        /// Custom config file path (default: ~/.config/space-recorder/config.toml)
-        #[arg(long, short = 'c')]
-        config: Option<String>,
-
-        /// Enable fal.ai video overlay mode
-        /// Type prompts during streaming to generate AI videos as overlay layers.
-        /// Requires FAL_API_KEY environment variable to be set.
-        #[arg(long)]
-        fal: bool,
-
-        /// AI video overlay opacity (0.0 = invisible, 1.0 = fully visible)
-        /// Defaults to webcam opacity if not specified.
-        /// Can be changed during stream via /opacity command.
-        #[arg(long, value_parser = parse_opacity)]
-        fal_opacity: Option<f32>,
-    },
-}
-
-#[derive(Subcommand)]
-enum FalCacheAction {
-    /// List all cached videos with prompts and sizes
-    List,
-    /// Clear cached videos (all or by specific hash)
-    Clear {
-        /// Specific video hash to clear (clears all if not provided)
-        hash: Option<String>,
-    },
-}
-
-
-
-/// Display formatted startup status showing current settings
-#[allow(clippy::too_many_arguments)]
-fn print_startup_status(
-    window_app: Option<&str>,
-    screen_device: &str,
-    screen_index: usize,
-    webcam_device: Option<&str>,
-    opacity: f32,
-    effect: VideoEffect,
-    vignette: bool,
-    grain: bool,
-    live_badge: bool,
-    timestamp: bool,
-    audio_device: Option<&str>,
-    volume: f32,
-    noise_gate: bool,
-    compressor: bool,
-) {
-    println!();
-    println!("┌─────────────────────────────────────────┐");
-    println!("│         space-recorder v{}          │", env!("CARGO_PKG_VERSION"));
-    println!("├─────────────────────────────────────────┤");
-
-    // Capture source
-    if let Some(app) = window_app {
-        println!("│  Window:   {:<28}│", app);
-    } else {
-        println!("│  Screen:   {:<28}│", format!("{} (index {})", screen_device, screen_index));
-    }
-
-    // Webcam and overlay settings
-    if let Some(wc) = webcam_device {
-        println!("│  Webcam:   {:<28}│", wc);
-        println!("│  Opacity:  {:<28}│", format!("{:.0}%", opacity * 100.0));
-        println!("│  Effect:   {:<28}│", effect);
-    } else {
-        println!("│  Webcam:   {:<28}│", "disabled");
-    }
-
-    // Visual effects
-    let mut effects_list = Vec::new();
-    if vignette { effects_list.push("vignette"); }
-    if grain { effects_list.push("grain"); }
-    if live_badge { effects_list.push("LIVE"); }
-    if timestamp { effects_list.push("timestamp"); }
-    let effects_str = if effects_list.is_empty() { "none".to_string() } else { effects_list.join(", ") };
-    println!("│  Effects:  {:<28}│", effects_str);
-
-    // Audio settings
-    if let Some(_audio) = audio_device {
-        let mut audio_effects = Vec::new();
-        if noise_gate { audio_effects.push("gate"); }
-        if compressor { audio_effects.push("comp"); }
-        let audio_fx = if audio_effects.is_empty() { "".to_string() } else { format!(" [{}]", audio_effects.join("+")) };
-        println!("│  Audio:    {:<28}│", format!("{:.0}%{}", volume * 100.0, audio_fx));
-    } else {
-        println!("│  Audio:    {:<28}│", "disabled");
-    }
-
-    println!("├─────────────────────────────────────────┤");
-    println!("│  HOTKEYS                                │");
-    println!("│    +/=     Increase opacity             │");
-    println!("│    -       Decrease opacity             │");
-    println!("│    Ctrl+C  Quit                         │");
-    println!("└─────────────────────────────────────────┘");
-    println!();
-}
-
-/// Spawn mpv for preview playback
-fn spawn_mpv() -> Result<std::process::Child, PipelineError> {
-    Command::new("mpv")
-        .args([
-            "--no-cache",
-            "--untimed",
-            "--no-terminal",
-            "--force-seekable=no",
-            "-",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                PipelineError::ProcessFailed {
-                    exit_code: None,
-                    stderr: "mpv not found. Please install it with:\n\n    brew install mpv\n"
-                        .to_string(),
-                }
-            } else {
-                PipelineError::ProcessFailed {
-                    exit_code: None,
-                    stderr: format!("Failed to spawn mpv: {}", e),
-                }
+mod pty;
+mod terminal;
+
+use camera::{CameraCapture, CameraSettings, Resolution};
+use cli::{Args, Command};
+use pty::{PtyHost, PtySize};
+use terminal::{AsciiFrame, CameraModal, ModalPosition, ModalSize, StatusBar};
+
+#[tokio::main]
+async fn main() {
+    let args = Args::parse();
+
+    // Handle subcommands
+    if let Some(cmd) = args.command {
+        match cmd {
+            Command::ListCameras => {
+                cli::list_cameras();
+                return;
             }
-        })
-}
-
-/// Spawn the FFmpeg pipeline with the given configuration, opacity, and output mode
-fn spawn_pipeline(
-    config: &PipelineConfig,
-    opacity: f32,
-    output_mode: &OutputMode,
-) -> Result<(Pipeline, Option<std::process::Child>), PipelineError> {
-    let args = config.build_ffmpeg_args(opacity, output_mode);
-    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-
-    match output_mode {
-        OutputMode::Preview | OutputMode::Both(_) => {
-            // Need to pipe to mpv for preview
-            let mut mpv = spawn_mpv()?;
-            let mpv_stdin = mpv.stdin.take().expect("Failed to get mpv stdin");
-            let pipeline = Pipeline::spawn_with_stdout(&args_ref, mpv_stdin)?;
-            Ok((pipeline, Some(mpv)))
-        }
-        OutputMode::Recording(_) => {
-            // Recording only, no preview
-            let pipeline = Pipeline::spawn(&args_ref)?;
-            Ok((pipeline, None))
+            Command::Config { action } => {
+                cli::handle_config_action(action);
+                return;
+            }
         }
     }
-}
 
-/// Format a CaptureError for user-friendly display
-fn format_capture_error(e: &CaptureError) -> String {
-    e.to_string()
-}
+    let shell = pty::select_shell(args.shell.as_deref());
 
-/// Format bytes as human-readable string (KB, MB, GB)
-fn format_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = 1024 * KB;
-    const GB: u64 = 1024 * MB;
+    // Get terminal size
+    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    let size = PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    };
 
-    if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
-    }
-}
-
-/// Run fal-cache subcommand
-fn run_fal_cache(action: FalCacheAction) -> Result<(), String> {
-    let cache = fal::VideoCache::with_default_dir()
-        .map_err(|e| format!("Failed to access cache directory: {}", e))?;
-
-    match action {
-        FalCacheAction::List => {
-            let entries = cache
-                .list_entries()
-                .map_err(|e| format!("Failed to list cache entries: {}", e))?;
-
-            if entries.is_empty() {
-                println!("Cache is empty.");
-                return Ok(());
-            }
-
-            println!("Cached videos:\n");
-            for entry in &entries {
-                let prompt_display = entry
-                    .prompt
-                    .as_ref()
-                    .map(|p| {
-                        // Truncate long prompts for display
-                        if p.len() > 50 {
-                            format!("{}...", &p[..47])
-                        } else {
-                            p.clone()
-                        }
-                    })
-                    .unwrap_or_else(|| "(no prompt data)".to_string());
-
-                println!(
-                    "  {} {} \"{}\"",
-                    entry.hash,
-                    format_size(entry.size_bytes),
-                    prompt_display
-                );
-            }
-
-            let total_size = cache
-                .total_size_bytes()
-                .map_err(|e| format!("Failed to calculate total size: {}", e))?;
-            println!("\nTotal: {} videos, {}", entries.len(), format_size(total_size));
-
-            Ok(())
+    // Spawn PTY with the shell
+    let pty = match PtyHost::spawn(&shell, size) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Failed to spawn shell: {}", e);
+            std::process::exit(1);
         }
-        FalCacheAction::Clear { hash } => {
-            match hash {
-                Some(h) => {
-                    // Clear specific video by hash
-                    let removed = cache
-                        .remove(&h)
-                        .map_err(|e| format!("Failed to remove cached video: {}", e))?;
+    };
 
-                    if removed {
-                        println!("Removed cached video: {}", h);
-                    } else {
-                        println!("No cached video found with hash: {}", h);
-                    }
-                }
-                None => {
-                    // Clear all cached videos
-                    let count = cache
-                        .clear_all()
-                        .map_err(|e| format!("Failed to clear cache: {}", e))?;
+    // Split the PTY into reader (for background thread) and writer (for main thread)
+    let (reader, pty_split) = pty.split();
 
-                    if count == 0 {
-                        println!("Cache is already empty.");
-                    } else {
-                        println!("Removed {} cached video{}.", count, if count == 1 { "" } else { "s" });
-                    }
-                }
-            }
-            Ok(())
-        }
-    }
-}
+    // Create tokio channel for PTY output (bounded for backpressure)
+    let (tx, rx) = mpsc::channel::<Vec<u8>>(64);
 
-/// Run fal-generate command to pre-generate AI video from a text prompt
-fn run_fal_generate(prompt: &str) -> Result<(), String> {
-    // Check if already cached
-    let cache = fal::VideoCache::with_default_dir_initialized()
-        .map_err(|e| format!("Failed to initialize cache: {}", e))?;
+    // Spawn background thread to read from PTY (blocking reads need their own thread)
+    let reader_handle = std::thread::spawn(move || {
+        pty_reader_thread(reader, tx);
+    });
 
-    if let Some(cached_path) = cache.get(prompt) {
-        println!("Found in cache: {}", cached_path.display());
-        println!("Hash: {}", fal::VideoCache::hash_prompt(prompt));
-        return Ok(());
-    }
+    // Enter raw mode with automatic cleanup on exit/panic
+    let _raw_guard = terminal::RawModeGuard::enter().expect("Failed to enter raw mode");
 
-    // Create the async runtime and run the generation
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| format!("Failed to create async runtime: {}", e))?;
+    // Initialize camera modal state with CLI args
+    let mut camera_modal = CameraModal::new();
+    camera_modal.position = args.position.into();
+    camera_modal.size = args.size.into();
+    camera_modal.charset = args.charset.into();
+    camera_modal.visible = !args.no_camera;
 
-    rt.block_on(async {
-        // Create the fal client (checks for API key)
-        let client = fal::FalClient::new().map_err(|e| match e {
-            fal::FalError::MissingApiKey => {
-                "FAL_API_KEY environment variable is not set.\n\n\
-                To use fal.ai features, add your API key to a .env file:\n\
-                    echo 'FAL_API_KEY=your-api-key-here' >> .env\n\n\
-                Or set it as an environment variable:\n\
-                    export FAL_API_KEY=\"your-api-key-here\"\n\n\
-                Get your API key at: https://fal.ai/".to_string()
-            }
-            _ => format!("Failed to create fal.ai client: {}", e),
-        })?;
+    // Initialize status bar (visible unless --no-status flag is set)
+    let status_bar = StatusBar::with_visibility(!args.no_status);
 
-        println!("Generating video for: \"{}\"", prompt);
-        println!();
-
-        // Step 1: Submit generation request
-        print!("Submitting to fal.ai... ");
-        std::io::Write::flush(&mut std::io::stdout()).ok();
-
-        let queue_response = client.submit_generation(prompt).await.map_err(|e| {
-            format!("Failed to submit generation request: {}", e)
-        })?;
-        println!("done");
-        println!("  Request ID: {}", queue_response.request_id);
-
-        // Step 2: Poll for completion
-        print!("Generating");
-        std::io::Write::flush(&mut std::io::stdout()).ok();
-
-        let video_url = loop {
-            let status = client.poll_status(&queue_response.request_id).await.map_err(|e| {
-                format!("\nFailed to check generation status: {}", e)
-            })?;
-
-            match status {
-                fal::GenerationStatus::Pending => {
-                    print!(".");
-                    std::io::Write::flush(&mut std::io::stdout()).ok();
-                }
-                fal::GenerationStatus::InProgress => {
-                    print!(".");
-                    std::io::Write::flush(&mut std::io::stdout()).ok();
-                }
-                fal::GenerationStatus::Completed { video_url } => {
-                    println!(" done");
-                    break video_url;
-                }
-                fal::GenerationStatus::Failed { error } => {
-                    return Err(format!("\nGeneration failed: {}", error));
-                }
-            }
-
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // Initialize camera capture if camera is enabled
+    let mut camera_capture: Option<CameraCapture> = if !args.no_camera {
+        let settings = CameraSettings {
+            device_index: args.camera,
+            resolution: Resolution::MEDIUM, // 640x480 - good balance of speed and quality
+            fps: 15, // Lower FPS for ASCII rendering is fine
+            mirror: args.mirror,
         };
-
-        // Step 3: Download the video
-        print!("Downloading video... ");
-        std::io::Write::flush(&mut std::io::stdout()).ok();
-
-        let temp_path = std::env::temp_dir()
-            .join("space-recorder")
-            .join(format!("{}.mp4", queue_response.request_id));
-
-        client.download_video(&video_url, &temp_path).await.map_err(|e| {
-            format!("Failed to download video: {}", e)
-        })?;
-        println!("done");
-
-        // Step 4: Store in cache
-        print!("Caching video... ");
-        std::io::Write::flush(&mut std::io::stdout()).ok();
-
-        let cached_path = cache.store_with_metadata(prompt, &temp_path)
-            .map_err(|e| format!("Failed to cache video: {}", e))?;
-        println!("done");
-
-        // Clean up temp file
-        let _ = std::fs::remove_file(&temp_path);
-
-        println!();
-        println!("Video ready!");
-        println!("  Path: {}", cached_path.display());
-        println!("  Hash: {}", fal::VideoCache::hash_prompt(prompt));
-
-        Ok(())
-    })
-}
-
-/// Run fal-generate --batch command to pre-generate AI videos from a file of prompts
-fn run_fal_generate_batch(batch_file: &std::path::Path) -> Result<(), String> {
-    // Read prompts from file
-    let contents = std::fs::read_to_string(batch_file)
-        .map_err(|e| format!("Failed to read batch file '{}': {}", batch_file.display(), e))?;
-
-    // Parse prompts (one per line, skip empty lines and comments)
-    let prompts: Vec<&str> = contents
-        .lines()
-        .map(|line| line.trim())
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .collect();
-
-    if prompts.is_empty() {
-        return Err(format!(
-            "No prompts found in batch file '{}'. Expected one prompt per line.",
-            batch_file.display()
-        ));
-    }
-
-    println!("Batch generation: {} prompts from '{}'", prompts.len(), batch_file.display());
-    println!();
-
-    // Initialize cache once for all generations
-    let cache = fal::VideoCache::with_default_dir_initialized()
-        .map_err(|e| format!("Failed to initialize cache: {}", e))?;
-
-    // Track results
-    let mut completed = 0;
-    let mut skipped = 0;
-    let mut failed = 0;
-    let total = prompts.len();
-
-    // Create async runtime once
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| format!("Failed to create async runtime: {}", e))?;
-
-    // Process each prompt sequentially
-    for (i, prompt) in prompts.iter().enumerate() {
-        let progress = format!("[{}/{}]", i + 1, total);
-
-        // Check if already cached
-        if cache.get(prompt).is_some() {
-            println!("{} Skipped (cached): \"{}\"", progress, prompt);
-            skipped += 1;
-            continue;
-        }
-
-        println!("{} Generating: \"{}\"", progress, prompt);
-
-        // Generate this prompt
-        let result = rt.block_on(async {
-            generate_single_video(&cache, prompt).await
-        });
-
-        match result {
-            Ok(path) => {
-                println!("    Cached: {}", path.display());
-                completed += 1;
+        match CameraCapture::open(settings) {
+            Ok(mut cam) => {
+                if let Err(e) = cam.start() {
+                    eprintln!("Warning: Failed to start camera: {}", e);
+                    None
+                } else {
+                    Some(cam)
+                }
             }
             Err(e) => {
-                eprintln!("    Failed: {}", e);
-                failed += 1;
-            }
-        }
-    }
-
-    // Summary
-    println!();
-    println!("Batch complete:");
-    println!("  Generated: {}", completed);
-    println!("  Skipped (cached): {}", skipped);
-    if failed > 0 {
-        println!("  Failed: {}", failed);
-    }
-
-    if failed > 0 && completed == 0 && skipped == 0 {
-        Err("All prompts failed to generate".to_string())
-    } else {
-        Ok(())
-    }
-}
-
-/// Generate a single video and cache it (helper for batch processing)
-async fn generate_single_video(cache: &fal::VideoCache, prompt: &str) -> Result<std::path::PathBuf, String> {
-    // Create the fal client
-    let client = fal::FalClient::new().map_err(|e| match e {
-        fal::FalError::MissingApiKey => {
-            "FAL_API_KEY environment variable is not set".to_string()
-        }
-        _ => format!("Failed to create fal.ai client: {}", e),
-    })?;
-
-    // Submit generation request
-    let queue_response = client.submit_generation(prompt).await.map_err(|e| {
-        format!("Submit failed: {}", e)
-    })?;
-
-    // Poll for completion
-    let video_url = loop {
-        let status = client.poll_status(&queue_response.request_id).await.map_err(|e| {
-            format!("Poll failed: {}", e)
-        })?;
-
-        match status {
-            fal::GenerationStatus::Pending | fal::GenerationStatus::InProgress => {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            }
-            fal::GenerationStatus::Completed { video_url } => {
-                break video_url;
-            }
-            fal::GenerationStatus::Failed { error } => {
-                return Err(format!("Generation failed: {}", error));
-            }
-        }
-    };
-
-    // Download the video
-    let temp_path = std::env::temp_dir()
-        .join("space-recorder")
-        .join(format!("{}.mp4", queue_response.request_id));
-
-    client.download_video(&video_url, &temp_path).await.map_err(|e| {
-        format!("Download failed: {}", e)
-    })?;
-
-    // Store in cache
-    let cached_path = cache.store_with_metadata(prompt, &temp_path)
-        .map_err(|e| format!("Cache failed: {}", e))?;
-
-    // Clean up temp file
-    let _ = std::fs::remove_file(&temp_path);
-
-    Ok(cached_path)
-}
-
-/// Run the start command with screen, webcam, and audio capture
-#[allow(clippy::too_many_arguments)] // Direct mapping from CLI args
-fn run_start(
-    window_app: Option<String>,
-    screen_index: Option<usize>,
-    webcam_device: Option<String>,
-    no_webcam: bool,
-    mirror: bool,
-    opacity: f32,
-    volume: f32,
-    no_audio: bool,
-    effect: VideoEffect,
-    vignette: bool,
-    grain: bool,
-    noise_gate: bool,
-    noise_gate_threshold: f32,
-    compressor: bool,
-    live_badge: bool,
-    timestamp: bool,
-    output_file: Option<String>,
-    resolution: (u32, u32),
-    framerate: u32,
-    fal_enabled: bool,
-    fal_opacity: f32,
-) -> Result<(), PipelineError> {
-    // Verify macOS permissions before capture starts
-    let need_webcam = !no_webcam;
-    let need_audio = !no_audio;
-    let need_accessibility = window_app.is_some();
-
-    let permission_errors = permissions::verify_permissions(
-        true, // Always need screen recording
-        need_webcam,
-        need_audio,
-        need_accessibility,
-    );
-
-    if !permission_errors.is_empty() {
-        permissions::print_permission_errors(&permission_errors);
-        return Err(PipelineError::ProcessFailed {
-            exit_code: None,
-            stderr: format!(
-                "{} permission(s) missing. Please grant the required permissions and try again.",
-                permission_errors.len()
-            ),
-        });
-    }
-
-    // Set up Ctrl+C handler
-    if let Err(e) = setup_ctrlc_handler() {
-        eprintln!("Warning: Could not set up Ctrl+C handler: {}", e);
-    }
-
-    // Set up hotkey manager for opacity control
-    let mut hotkey_manager = HotkeyManager::new(opacity);
-    let hotkeys_enabled = hotkey_manager.start().is_ok();
-    if !hotkeys_enabled {
-        eprintln!("Warning: Could not start hotkey listener. Opacity hotkeys (+/-) will not work.");
-        eprintln!("On macOS, ensure Accessibility permission is granted.\n");
-    }
-
-    // Configure screen capture
-    let screen_capture = ScreenCapture::new(screen_index.unwrap_or(0))
-        .with_framerate(framerate);
-
-    // Find the screen device
-    let screen_device = screen_capture.find_screen_device().map_err(|e| {
-        PipelineError::ProcessFailed {
-            exit_code: None,
-            stderr: e.to_string(),
-        }
-    })?;
-
-    // Configure window capture (if --window is specified)
-    let window_capture = if let Some(ref app_name) = window_app {
-        let mut wc = WindowCapture::new(app_name);
-        match wc.detect_bounds() {
-            Ok(_bounds) => Some(wc),
-            Err(e) => {
-                return Err(PipelineError::ProcessFailed {
-                    exit_code: None,
-                    stderr: format_capture_error(&e),
-                });
-            }
-        }
-    } else {
-        None
-    };
-
-    // Configure webcam capture
-    let webcam_capture = if no_webcam {
-        WebcamCapture::disabled()
-    } else {
-        let mut wc = WebcamCapture::new()
-            .with_mirror(mirror)
-            .with_framerate(framerate);
-        if let Some(device) = webcam_device {
-            wc = wc.with_device(device);
-        }
-        wc
-    };
-
-    // Find webcam device if enabled
-    let webcam_device_name = if webcam_capture.enabled {
-        match webcam_capture.find_webcam_device() {
-            Ok(name) => Some(name),
-            Err(e) => {
-                eprintln!("Warning: {}", e);
-                eprintln!("Continuing without webcam.\n");
+                eprintln!("Warning: Failed to open camera: {}", e);
                 None
             }
         }
@@ -917,442 +107,597 @@ fn run_start(
         None
     };
 
-    // Configure audio capture
-    let audio_capture = if no_audio {
-        AudioCapture::disabled()
-    } else {
-        let mut ac = AudioCapture::new().with_volume(volume);
-        if noise_gate {
-            ac = ac.with_noise_gate_threshold(noise_gate_threshold);
-        }
-        if compressor {
-            ac = ac.with_compressor();
-        }
-        ac
-    };
+    // Run the async I/O loop
+    let result = run_async_loop(
+        pty_split,
+        rx,
+        &mut camera_modal,
+        &status_bar,
+        camera_capture.as_mut(),
+        args.invert,
+    )
+    .await;
 
-    // Find audio device if enabled
-    let audio_device_name = if audio_capture.enabled {
-        match audio_capture.find_audio_device() {
-            Ok(name) => Some(name),
-            Err(e) => {
-                eprintln!("Warning: {}", e);
-                eprintln!("Continuing without audio.\n");
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // Wait for reader thread to finish (it will exit when PTY closes)
+    let _ = reader_handle.join();
 
-    // Display status with current settings
-    print_startup_status(
-        window_app.as_deref(),
-        &screen_device,
-        screen_capture.screen_index,
-        webcam_device_name.as_deref(),
-        opacity,
-        effect,
-        vignette,
-        grain,
-        live_badge,
-        timestamp,
-        audio_device_name.as_deref(),
-        audio_capture.volume,
-        audio_capture.noise_gate.enabled,
-        audio_capture.compressor.enabled,
-    );
-
-    // Create pipeline configuration for respawning
-    let config = PipelineConfig {
-        screen_capture,
-        screen_device,
-        window_capture,
-        webcam_capture,
-        webcam_device_name,
-        audio_capture,
-        audio_device_name,
-        effect,
-        vignette,
-        grain,
-        live_badge,
-        timestamp,
-        resolution,
-        framerate,
-        ai_video_path: None,      // AI video will be set when fal.ai integration is enabled via --fal
-        ai_video_opacity: fal_opacity,
-    };
-
-    // Determine output mode
-    let output_mode = match output_file {
-        Some(path) => OutputMode::Both(path.clone()),
-        None => OutputMode::Preview,
-    };
-
-    // Track current opacity for restarts
-    let mut current_opacity = opacity;
-
-    // Start fal.ai prompt input listener if --fal is enabled
-    let prompt_receiver = if fal_enabled {
-        let (_prompt_input, receiver) = fal::PromptInput::spawn_listener();
-        Some(receiver)
-    } else {
-        None
-    };
-
-    // Spawn initial pipeline
-    let (mut pipeline, mut mpv) = spawn_pipeline(&config, current_opacity, &output_mode)?;
-
-    let has_preview = mpv.is_some();
-    if has_preview {
-        println!("Streaming... (preview window opened)");
-    } else {
-        println!("Recording...");
+    // Handle any errors from the I/O loop
+    if let Err(e) = result {
+        // Restore terminal before printing error
+        drop(_raw_guard);
+        eprintln!("\nError: {}", e);
+        std::process::exit(1);
     }
-    if let OutputMode::Both(ref path) = output_mode {
-        println!("Recording to: {}", path);
-    } else if let OutputMode::Recording(ref path) = output_mode {
-        println!("Recording to: {}", path);
-    }
+}
 
-    // Log fal.ai instructions if enabled
-    if fal_enabled {
-        println!();
-        println!("fal.ai overlay mode enabled. Type prompts to generate AI videos:");
-        println!("  - Enter a prompt to generate video (e.g., \"cyberpunk cityscape\")");
-        println!("  - /clear    - Remove current AI overlay");
-        println!("  - /opacity <value> - Set AI overlay opacity (0.0-1.0)");
-        println!();
-    }
+/// Background thread that reads from PTY and sends data through channel.
+/// This runs in a separate thread because PTY reads are blocking.
+fn pty_reader_thread(mut reader: Box<dyn Read + Send>, tx: mpsc::Sender<Vec<u8>>) {
+    let mut buf = [0u8; 4096];
 
-    // Wait for either process to exit, Ctrl+C, or opacity change
     loop {
-        // Check if Ctrl+C was received
-        if pipeline::ctrlc_received() {
-            println!("\nShutting down...");
-            pipeline.shutdown()?;
-            if let Some(ref mut mpv_proc) = mpv {
-                let _ = mpv_proc.kill();
+        match reader.read(&mut buf) {
+            Ok(0) => {
+                // EOF - shell closed
+                break;
             }
-            break;
-        }
-
-        // Check if opacity changed (hotkey pressed)
-        if hotkey_manager.take_opacity_changed() {
-            let new_opacity = hotkey_manager.opacity();
-
-            // Only restart if opacity actually changed
-            if (new_opacity - current_opacity).abs() > 0.001 {
-                eprintln!("[restart] Restarting pipeline with opacity {:.0}%...", new_opacity * 100.0);
-
-                // Measure restart time
-                let restart_start = std::time::Instant::now();
-
-                // Shut down current pipeline
-                let _ = pipeline.shutdown();
-                if let Some(ref mut mpv_proc) = mpv {
-                    let _ = mpv_proc.kill();
-                    let _ = mpv_proc.wait(); // Ensure mpv is fully stopped
-                }
-
-                // Spawn new pipeline with updated opacity
-                match spawn_pipeline(&config, new_opacity, &output_mode) {
-                    Ok((new_pipeline, new_mpv)) => {
-                        pipeline = new_pipeline;
-                        mpv = new_mpv;
-                        current_opacity = new_opacity;
-
-                        let restart_duration = restart_start.elapsed();
-                        eprintln!("[restart] Pipeline restarted in {:?}", restart_duration);
-                    }
-                    Err(e) => {
-                        eprintln!("[restart] Failed to restart pipeline: {}", e);
-                        // Try to recover with original opacity
-                        match spawn_pipeline(&config, current_opacity, &output_mode) {
-                            Ok((new_pipeline, new_mpv)) => {
-                                pipeline = new_pipeline;
-                                mpv = new_mpv;
-                                eprintln!("[restart] Recovered with previous opacity");
-                            }
-                            Err(e2) => {
-                                eprintln!("[restart] Recovery failed: {}", e2);
-                                return Err(e);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Check for fal.ai prompt commands (non-blocking)
-        if let Some(ref receiver) = prompt_receiver {
-            // Non-blocking check for prompt commands
-            while let Ok(cmd) = receiver.try_recv() {
-                match cmd {
-                    fal::PromptCommand::Generate(prompt) => {
-                        // Log that we received the prompt (actual video generation will be implemented in later tasks)
-                        fal::PromptInput::print_generating(&prompt);
-                        eprintln!("[fal] Video generation not yet fully integrated. Prompt received: \"{}\"", prompt);
-                    }
-                    fal::PromptCommand::Clear => {
-                        fal::PromptInput::print_overlay_cleared();
-                        eprintln!("[fal] Clear overlay requested (full integration coming in later tasks)");
-                    }
-                    fal::PromptCommand::SetOpacity(value) => {
-                        fal::PromptInput::print_opacity_set(value);
-                        eprintln!("[fal] AI overlay opacity set to {:.0}% (full integration coming in later tasks)", value * 100.0);
-                    }
-                }
-            }
-        }
-
-        // Check if FFmpeg is still running
-        if !pipeline.is_running() {
-            let status = pipeline.wait()?;
-            if let Some(ref mut mpv_proc) = mpv {
-                let _ = mpv_proc.kill();
-            }
-            if !status.success() {
-                let stderr_lines = pipeline.take_stderr_output();
-                return Err(PipelineError::ProcessFailed {
-                    exit_code: status.code(),
-                    stderr: stderr_lines.join("\n"),
-                });
-            }
-            break;
-        }
-
-        // Check if mpv is still running (when in preview mode)
-        if let Some(ref mut mpv_proc) = mpv {
-            match mpv_proc.try_wait() {
-                Ok(Some(_)) => {
-                    // mpv exited, shut down FFmpeg
-                    println!("\nPreview window closed.");
-                    pipeline.shutdown()?;
+            Ok(n) => {
+                // Send the data to the main thread using blocking_send for sync context
+                // If the receiver is dropped, this will fail and we'll exit
+                if tx.blocking_send(buf[..n].to_vec()).is_err() {
                     break;
                 }
-                Ok(None) => {} // Still running
-                Err(_) => break,
+            }
+            Err(_) => {
+                // I/O error - exit the thread
+                break;
             }
         }
+    }
+}
 
-        std::thread::sleep(std::time::Duration::from_millis(100));
+/// Result of handling a key event.
+enum KeyAction {
+    /// Key was handled as a hotkey (don't forward to PTY)
+    Handled,
+    /// Key should be forwarded to PTY
+    Forward(Vec<u8>),
+    /// No action needed
+    None,
+}
+
+/// Handle a key event, checking for hotkeys first.
+///
+/// Hotkeys intercepted (not forwarded to PTY):
+/// - Alt+C: Toggle camera visibility
+/// - Alt+P: Cycle position
+/// - Alt+S: Cycle size
+/// - Alt+A: Cycle charset
+fn handle_key_event(event: KeyEvent, modal: &mut CameraModal) -> KeyAction {
+    let KeyEvent {
+        code, modifiers, ..
+    } = event;
+
+    // Check for Alt+key hotkeys first
+    if modifiers.contains(KeyModifiers::ALT) {
+        match code {
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                modal.toggle();
+                return KeyAction::Handled;
+            }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                modal.cycle_position();
+                return KeyAction::Handled;
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                modal.cycle_size();
+                return KeyAction::Handled;
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                modal.cycle_charset();
+                return KeyAction::Handled;
+            }
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                modal.cycle_transparency();
+                return KeyAction::Handled;
+            }
+            _ => {
+                // Other Alt+key combinations - forward to PTY
+            }
+        }
     }
 
-    println!("Capture stopped.");
+    // Convert to bytes for PTY
+    match key_event_to_bytes(event) {
+        Some(bytes) => KeyAction::Forward(bytes),
+        None => KeyAction::None,
+    }
+}
+
+/// Async main event loop using tokio::select! for concurrent handling.
+///
+/// This loop handles three concurrent concerns:
+/// 1. Terminal events (keyboard input, resize) via crossterm EventStream
+/// 2. PTY output via tokio channel from the reader thread
+/// 3. Camera frame capture and ASCII rendering (~15 FPS)
+///
+/// The loop exits when the shell closes (PTY channel disconnects) or on error.
+async fn run_async_loop(
+    mut pty: pty::PtyHostSplit,
+    mut pty_rx: mpsc::Receiver<Vec<u8>>,
+    camera_modal: &mut CameraModal,
+    _status_bar: &StatusBar,
+    camera: Option<&mut CameraCapture>,
+    invert: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut stdout = std::io::stdout();
+    let mut event_stream = EventStream::new();
+
+    // Camera frame interval (~15 FPS for ASCII rendering)
+    let mut camera_interval = tokio::time::interval(Duration::from_millis(67));
+    camera_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    // Reusable buffers for ASCII conversion (avoid allocations in hot path)
+    let mut gray_buffer: Vec<u8> = Vec::new();
+    let mut brightness_buffer: Vec<u8> = Vec::new();
+    let mut char_buffer: Vec<char> = Vec::new();
+    let mut color_buffer: Vec<ascii::CellColor> = Vec::new();
+
+    // Track terminal size for modal positioning
+    let (mut term_cols, mut term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
+
+    // Track previous modal state to clear old area when size/position/visibility changes
+    let mut prev_modal_size = camera_modal.size;
+    let mut prev_modal_position = camera_modal.position;
+    let mut prev_modal_visible = camera_modal.visible;
+
+    loop {
+        // Check if shell has exited (non-blocking)
+        if let Some(_status) = pty.try_wait()? {
+            break;
+        }
+
+        tokio::select! {
+            // Handle terminal events (keyboard input, resize)
+            maybe_event = event_stream.next() => {
+                match maybe_event {
+                    Some(Ok(event)) => {
+                        match event {
+                            Event::Key(key_event) => {
+                                // Handle hotkeys first, then forward other keys to PTY
+                                match handle_key_event(key_event, camera_modal) {
+                                    KeyAction::Handled => {
+                                        // Check if camera was toggled off - need to clear the area
+                                        if prev_modal_visible && !camera_modal.visible {
+                                            clear_modal_area(
+                                                &mut stdout,
+                                                prev_modal_size,
+                                                prev_modal_position,
+                                                term_cols,
+                                                term_rows,
+                                            )?;
+                                        }
+                                        prev_modal_visible = camera_modal.visible;
+                                    }
+                                    KeyAction::Forward(bytes) => {
+                                        pty.write(&bytes)?;
+                                    }
+                                    KeyAction::None => {
+                                        // Key not recognized, ignore
+                                    }
+                                }
+                            }
+                            Event::Resize(cols, rows) => {
+                                // Terminal was resized (SIGWINCH) - resize the PTY to match
+                                term_cols = cols;
+                                term_rows = rows;
+                                let new_size = PtySize {
+                                    rows,
+                                    cols,
+                                    pixel_width: 0,
+                                    pixel_height: 0,
+                                };
+                                pty.resize(new_size)?;
+                            }
+                            _ => {
+                                // Ignore other events (mouse, focus, etc.)
+                            }
+                        }
+                    }
+                    Some(Err(e)) => {
+                        return Err(Box::new(e));
+                    }
+                    None => {
+                        // Event stream ended - shouldn't happen normally
+                        break;
+                    }
+                }
+            }
+
+            // Handle PTY output from the reader thread
+            maybe_data = pty_rx.recv() => {
+                match maybe_data {
+                    Some(data) => {
+                        // Write PTY output to stdout - colors and escape sequences pass through
+                        stdout.write_all(&data)?;
+                        stdout.flush()?;
+                    }
+                    None => {
+                        // Channel closed - reader thread exited (shell closed)
+                        break;
+                    }
+                }
+            }
+
+            // Camera frame capture and rendering
+            _ = camera_interval.tick() => {
+                if camera_modal.visible {
+                    if let Some(ref cam) = camera {
+                        if let Some(frame) = cam.get_frame() {
+                            // Get modal dimensions
+                            let (modal_width, modal_height) = camera_modal.size.inner_dimensions();
+
+                            // Downsample colors for the frame
+                            ascii::downsample_colors_into(
+                                &frame,
+                                modal_width,
+                                modal_height,
+                                &mut color_buffer,
+                            );
+
+                            // Convert colors to terminal CellColor format
+                            let terminal_colors: Vec<terminal::CellColor> = color_buffer
+                                .iter()
+                                .map(|c| terminal::CellColor { r: c.r, g: c.g, b: c.b })
+                                .collect();
+
+                            // Convert frame to ASCII
+                            let ascii_frame = if camera_modal.charset.is_braille() {
+                                // Braille rendering (2x4 subpixel resolution)
+                                ascii::to_grayscale_into(&frame, &mut gray_buffer);
+                                let chars = ascii::render_braille(
+                                    &gray_buffer,
+                                    frame.width,
+                                    frame.height,
+                                    modal_width,
+                                    modal_height,
+                                    128, // threshold
+                                    invert,
+                                );
+                                AsciiFrame::from_chars_colored(chars, terminal_colors, modal_width, modal_height)
+                            } else {
+                                // Standard/blocks/minimal charset rendering
+                                ascii::to_grayscale_into(&frame, &mut gray_buffer);
+                                ascii::downsample_into(
+                                    &gray_buffer,
+                                    frame.width,
+                                    frame.height,
+                                    modal_width,
+                                    modal_height,
+                                    &mut brightness_buffer,
+                                );
+                                ascii::map_to_chars_into(
+                                    &brightness_buffer,
+                                    camera_modal.charset.chars(),
+                                    invert,
+                                    &mut char_buffer,
+                                );
+                                AsciiFrame::from_chars_colored(char_buffer.clone(), terminal_colors, modal_width, modal_height)
+                            };
+
+                            camera_modal.set_frame(ascii_frame);
+
+                            // Check if modal size/position changed - need to clear old area
+                            let size_changed = prev_modal_size != camera_modal.size;
+                            let position_changed = prev_modal_position != camera_modal.position;
+
+                            if size_changed || position_changed {
+                                // Clear the old modal area
+                                clear_modal_area(
+                                    &mut stdout,
+                                    prev_modal_size,
+                                    prev_modal_position,
+                                    term_cols,
+                                    term_rows,
+                                )?;
+                                prev_modal_size = camera_modal.size;
+                                prev_modal_position = camera_modal.position;
+                            }
+
+                            // Render the overlay
+                            render_camera_overlay(
+                                &mut stdout,
+                                camera_modal,
+                                term_cols,
+                                term_rows,
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
-/// Load .env file and check for FAL_API_KEY
+/// Clear a modal area by filling it with spaces.
 ///
-/// Loads environment variables from .env file in the project root.
-/// Does not override existing environment variables.
-/// Logs a warning if FAL_API_KEY is not set.
-fn load_env() {
-    // Load .env file, don't override existing env vars
-    // dotenv::dotenv() returns Err if .env doesn't exist, which is fine
-    let _ = dotenv::dotenv();
+/// Used when modal size/position changes to erase the old rendering.
+fn clear_modal_area(
+    stdout: &mut std::io::Stdout,
+    size: ModalSize,
+    position: ModalPosition,
+    term_cols: u16,
+    term_rows: u16,
+) -> std::io::Result<()> {
+    use ratatui::layout::Rect;
 
-    // Check for FAL_API_KEY and warn if not set
-    if std::env::var("FAL_API_KEY").is_err() {
-        eprintln!("Warning: FAL_API_KEY environment variable not set.");
-        eprintln!("         fal.ai video overlay features will be disabled.");
-        eprintln!("         Set FAL_API_KEY in .env or environment to enable.\n");
+    let container = Rect {
+        x: 0,
+        y: 0,
+        width: term_cols,
+        height: term_rows,
+    };
+
+    // Create a temporary modal to calculate the rect
+    let temp_modal = CameraModal {
+        visible: true,
+        position,
+        size,
+        charset: ascii::CharSet::Standard,
+        border: false,
+        frame: None,
+        transparency: 80,
+    };
+
+    let modal_rect = temp_modal.calculate_rect(container);
+
+    let mut output = String::new();
+    output.push_str("\x1b[s");  // Save cursor
+    output.push_str("\x1b[?25l");  // Hide cursor
+
+    // Fill entire modal area with spaces
+    for row in 0..modal_rect.height {
+        let y = modal_rect.y + row + 1;  // 1-based
+        let x = modal_rect.x + 1;  // 1-based
+        output.push_str(&format!("\x1b[{};{}H", y, x));
+        for _ in 0..modal_rect.width {
+            output.push(' ');
+        }
     }
+
+    output.push_str("\x1b[?25h");  // Show cursor
+    output.push_str("\x1b[u");  // Restore cursor
+
+    stdout.write_all(output.as_bytes())?;
+    stdout.flush()?;
+
+    Ok(())
 }
 
-fn main() {
-    // Load .env file before anything else
-    load_env();
+/// Render the camera modal overlay on top of the terminal.
+///
+/// Uses ANSI escape codes to position and draw the overlay without
+/// disturbing the underlying PTY output. This approach:
+/// 1. Saves cursor position
+/// 2. Moves to modal location
+/// 3. Draws each line of the ASCII frame
+/// 4. Restores cursor position
+fn render_camera_overlay(
+    stdout: &mut std::io::Stdout,
+    modal: &CameraModal,
+    term_cols: u16,
+    term_rows: u16,
+) -> std::io::Result<()> {
+    use ratatui::layout::Rect;
 
-    let cli = Cli::parse();
+    let Some(ref frame) = modal.frame else {
+        return Ok(());
+    };
 
-    match cli.command {
-        Some(Commands::ListDevices { video, audio }) => {
-            match devices::list_avfoundation_devices() {
-                Ok(device_list) => devices::print_devices(&device_list, video, audio),
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
-                }
-            }
+    // Calculate modal position
+    let container = Rect {
+        x: 0,
+        y: 0,
+        width: term_cols,
+        height: term_rows,
+    };
+    let modal_rect = modal.calculate_rect(container);
+
+    // Build the output string with ANSI escape codes
+    let mut output = String::new();
+
+    // Save cursor position
+    output.push_str("\x1b[s");
+
+    // Hide cursor during rendering to reduce flicker
+    output.push_str("\x1b[?25l");
+
+    // Calculate inner area (accounting for border if present)
+    let inner_x = if modal.border { modal_rect.x + 1 } else { modal_rect.x };
+    let inner_y = if modal.border { modal_rect.y + 1 } else { modal_rect.y };
+    let inner_width = if modal.border { modal_rect.width.saturating_sub(2) } else { modal_rect.width };
+    let inner_height = if modal.border { modal_rect.height.saturating_sub(2) } else { modal_rect.height };
+
+    // Draw border if enabled
+    if modal.border {
+        // Top border
+        output.push_str(&format!("\x1b[{};{}H", modal_rect.y + 1, modal_rect.x + 1));
+        output.push('┌');
+        for _ in 0..inner_width {
+            output.push('─');
         }
-        Some(Commands::FalCache { action }) => {
-            if let Err(e) = run_fal_cache(action) {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
+        output.push('┐');
+
+        // Bottom border
+        output.push_str(&format!("\x1b[{};{}H", modal_rect.y + modal_rect.height, modal_rect.x + 1));
+        output.push('└');
+        for _ in 0..inner_width {
+            output.push('─');
         }
-        Some(Commands::FalGenerate { prompt, batch }) => {
-            let result = if let Some(batch_file) = batch {
-                run_fal_generate_batch(&batch_file)
-            } else if let Some(p) = prompt {
-                run_fal_generate(&p)
-            } else {
-                Err("Either a prompt or --batch file must be provided".to_string())
-            };
-            if let Err(e) = result {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
+        output.push('┘');
+
+        // Side borders
+        for row in 0..inner_height {
+            let y = inner_y + row + 1;
+            // Left border
+            output.push_str(&format!("\x1b[{};{}H│", y, modal_rect.x + 1));
+            // Right border
+            output.push_str(&format!("\x1b[{};{}H│", y, modal_rect.x + modal_rect.width));
         }
-        Some(Commands::Start { window, screen, webcam, no_webcam, mirror, opacity, volume, no_audio, effect, no_effects, vignette, no_vignette, grain, noise_gate, noise_gate_threshold, compressor, live, no_live_badge, timestamp, no_timestamp, output, resolution, framerate, config: config_path, fal, fal_opacity }) => {
-            // Load config file
-            // If --config is specified, require the file to exist
-            // Otherwise, fall back to defaults if default config not found
-            let cfg = if let Some(ref path) = config_path {
-                let path = std::path::PathBuf::from(path);
-                match config::Config::load_from_explicit(path.clone()) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("Error: {}", e);
-                        std::process::exit(1);
+    }
+
+    // Draw ASCII frame content line by line with colors
+    // Skip bright/white pixels to let terminal content show through
+    let lines: Vec<&[char]> = frame.chars.chunks(frame.width as usize).collect();
+    let has_colors = frame.colors.is_some();
+    let colors = frame.colors.as_ref();
+
+    // Calculate brightness threshold from transparency setting
+    // Higher transparency = lower threshold = more pixels skipped
+    // transparency=0 -> threshold=765 (nothing transparent, draw everything)
+    // transparency=80 -> threshold=153 (only draw very dark pixels)
+    // transparency=100 -> threshold=0 (everything transparent)
+    let max_brightness: u16 = 765; // 255 * 3
+    let brightness_threshold = (max_brightness as u32 * (100 - modal.transparency as u32) / 100) as u16;
+
+    for (row, line) in lines.iter().enumerate().take(inner_height as usize) {
+        let y = inner_y + row as u16 + 1;  // +1 for 1-based ANSI coordinates
+        let base_x = inner_x + 1;  // +1 for 1-based ANSI coordinates
+
+        let chars_to_write = line.len().min(inner_width as usize);
+        let row_start = row * frame.width as usize;
+
+        // Track if we need to reposition cursor (after skipping transparent pixels)
+        let mut need_reposition = true;
+
+        for (col, &c) in line[..chars_to_write].iter().enumerate() {
+            let mut is_transparent = false;
+
+            if has_colors {
+                if let Some(colors) = colors {
+                    let idx = row_start + col;
+                    if idx < colors.len() {
+                        let color = &colors[idx];
+                        let brightness = color.r as u16 + color.g as u16 + color.b as u16;
+
+                        if brightness < brightness_threshold {
+                            // Skip this pixel - it's too dark, let background show
+                            is_transparent = true;
+                            need_reposition = true;
+                        } else {
+                            // Position cursor if needed
+                            if need_reposition {
+                                output.push_str(&format!("\x1b[{};{}H", y, base_x + col as u16));
+                                need_reposition = false;
+                            }
+                            // ANSI true color (24-bit): ESC[38;2;R;G;Bm for foreground
+                            output.push_str(&format!("\x1b[38;2;{};{};{}m", color.r, color.g, color.b));
+                        }
                     }
                 }
             } else {
-                match config::Config::load() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("Warning: Failed to load config file: {}", e);
-                        eprintln!("Using default settings.\n");
-                        config::Config::default()
-                    }
+                // No colors - position if needed
+                if need_reposition {
+                    output.push_str(&format!("\x1b[{};{}H", y, base_x + col as u16));
+                    need_reposition = false;
                 }
-            };
+            }
 
-            // Merge settings: CLI args > config file > built-in defaults
-            // Window: CLI > config
-            let window = window.or(cfg.capture.window.app_name);
-
-            // Screen: CLI > config
-            let screen = screen.or(cfg.capture.screen.device);
-
-            // Webcam settings
-            // no_webcam CLI flag takes precedence, otherwise check config
-            let no_webcam = no_webcam || cfg.capture.webcam.enabled.map(|e| !e).unwrap_or(false);
-            let mirror = mirror || cfg.capture.webcam.mirror.unwrap_or(false);
-            let webcam = webcam.or(cfg.capture.webcam.device);
-
-            // Opacity: CLI > config > default (0.3)
-            let opacity = opacity
-                .or(cfg.compositor.opacity)
-                .unwrap_or(0.3);
-
-            // Effect: CLI > config > default (none)
-            let effect = effect
-                .or_else(|| {
-                    cfg.effects.preset.as_ref().and_then(|p| VideoEffect::from_str(p))
-                })
-                .unwrap_or(VideoEffect::None);
-
-            // --no-effects overrides --effect
-            let effect = if no_effects { VideoEffect::None } else { effect };
-
-            // Vignette: CLI flag > config > default (on when effects are enabled)
-            let vignette = if no_vignette {
-                false
-            } else if vignette {
-                true
-            } else if let Some(v) = cfg.effects.vignette {
-                v
-            } else {
-                // Default: on when any effect is enabled (not none and not --no-effects)
-                effect != VideoEffect::None
-            };
-
-            // Grain: CLI flag > config > default (false)
-            let grain = grain || cfg.effects.grain.unwrap_or(false);
-
-            // LIVE badge: CLI flags > config > default (false)
-            // --no-live-badge takes precedence over --live and config
-            let live_badge = if no_live_badge {
-                false
-            } else if live {
-                true
-            } else {
-                cfg.effects.overlays.live_badge.unwrap_or(false)
-            };
-
-            // Timestamp: CLI flags > config > default (false)
-            // --no-timestamp takes precedence over --timestamp and config
-            let timestamp = if no_timestamp {
-                false
-            } else if timestamp {
-                true
-            } else {
-                cfg.effects.overlays.timestamp.unwrap_or(false)
-            };
-
-            // Audio settings
-            // no_audio CLI flag takes precedence, otherwise check config
-            let no_audio = no_audio || cfg.audio.enabled.map(|e| !e).unwrap_or(false);
-
-            // Volume: CLI > config > default (1.0)
-            let volume = volume
-                .or(cfg.audio.volume)
-                .unwrap_or(1.0);
-
-            // Noise gate: CLI flag > config > default (false)
-            let noise_gate = noise_gate || cfg.audio.processing.noise_gate.unwrap_or(false);
-
-            // Noise gate threshold: CLI > config > default (0.01)
-            let noise_gate_threshold = noise_gate_threshold
-                .or(cfg.audio.processing.noise_gate_threshold)
-                .unwrap_or(0.01);
-
-            // Compressor: CLI flag > config > default (false)
-            let compressor = compressor || cfg.audio.processing.compressor.unwrap_or(false);
-
-            // Resolution: CLI > config > default (1280x720)
-            let resolution = resolution
-                .or_else(|| cfg.output.resolution.map(|r| (r[0], r[1])))
-                .unwrap_or((1280, 720));
-
-            // Framerate: CLI > config > default (30)
-            let framerate = framerate
-                .or(cfg.output.framerate)
-                .unwrap_or(30);
-
-            // Check FAL_API_KEY if --fal is enabled
-            // If API key is missing, warn and continue with fal features disabled
-            let fal = if fal && std::env::var("FAL_API_KEY").is_err() {
-                eprintln!("Warning: FAL_API_KEY environment variable not set.");
-                eprintln!("         fal.ai video overlay features will be disabled.");
-                eprintln!();
-                eprintln!("To enable fal.ai video overlay, add your API key to a .env file:");
-                eprintln!("  echo 'FAL_API_KEY=your-api-key-here' >> .env");
-                eprintln!();
-                eprintln!("Or set it as an environment variable:");
-                eprintln!("  export FAL_API_KEY=\"your-api-key-here\"");
-                eprintln!();
-                eprintln!("Get your API key at: https://fal.ai/");
-                eprintln!();
-                false // Disable fal features but continue
-            } else {
-                fal
-            };
-
-            // fal_opacity: CLI > webcam opacity (defaults to same as webcam opacity)
-            let fal_opacity = fal_opacity.unwrap_or(opacity);
-
-            if let Err(e) = run_start(window, screen, webcam, no_webcam, mirror, opacity, volume, no_audio, effect, vignette, grain, noise_gate, noise_gate_threshold, compressor, live_badge, timestamp, output, resolution, framerate, fal, fal_opacity) {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
+            if !is_transparent {
+                output.push(c);
             }
         }
-        None => {
-            // Show brief help when no command is provided
-            println!("space-recorder {}", env!("CARGO_PKG_VERSION"));
-            println!("Video compositor for coding streams\n");
-            println!("USAGE:");
-            println!("    space-recorder <COMMAND>\n");
-            println!("COMMANDS:");
-            println!("    start         Start the compositor and preview in mpv");
-            println!("    list-devices  List available video and audio capture devices");
-            println!("    fal-cache     Manage fal.ai video cache");
-            println!("    help          Print this message or the help of a subcommand\n");
-            println!("Run 'space-recorder --help' for more details and examples.");
-        }
+    }
+
+    // Reset colors and show cursor
+    output.push_str("\x1b[0m");  // Reset all attributes
+    output.push_str("\x1b[?25h");
+
+    // Restore cursor position
+    output.push_str("\x1b[u");
+
+    // Write all at once for efficiency
+    stdout.write_all(output.as_bytes())?;
+    stdout.flush()?;
+
+    Ok(())
+}
+
+/// Convert a crossterm KeyEvent to bytes that can be sent to the PTY
+fn key_event_to_bytes(event: KeyEvent) -> Option<Vec<u8>> {
+    let KeyEvent {
+        code, modifiers, ..
+    } = event;
+
+    // Handle Ctrl+key combinations
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        return match code {
+            // Ctrl+A through Ctrl+Z map to 0x01-0x1A
+            KeyCode::Char(c) if c.is_ascii_alphabetic() => {
+                let ctrl_char = (c.to_ascii_lowercase() as u8) - b'a' + 1;
+                Some(vec![ctrl_char])
+            }
+            // Ctrl+[ is ESC (0x1B)
+            KeyCode::Char('[') => Some(vec![0x1B]),
+            // Ctrl+\ is 0x1C
+            KeyCode::Char('\\') => Some(vec![0x1C]),
+            // Ctrl+] is 0x1D
+            KeyCode::Char(']') => Some(vec![0x1D]),
+            // Ctrl+^ is 0x1E
+            KeyCode::Char('^') => Some(vec![0x1E]),
+            // Ctrl+_ is 0x1F
+            KeyCode::Char('_') => Some(vec![0x1F]),
+            // Ctrl+Space is NUL (0x00)
+            KeyCode::Char(' ') => Some(vec![0x00]),
+            _ => None,
+        };
+    }
+
+    // Handle Alt+key combinations (send ESC prefix)
+    if modifiers.contains(KeyModifiers::ALT) {
+        return match code {
+            KeyCode::Char(c) => Some(vec![0x1B, c as u8]),
+            _ => None,
+        };
+    }
+
+    // Handle regular keys and special keys
+    match code {
+        KeyCode::Char(c) => Some(c.to_string().into_bytes()),
+        KeyCode::Enter => Some(vec![b'\r']),
+        KeyCode::Tab => Some(vec![b'\t']),
+        KeyCode::Backspace => Some(vec![0x7F]), // DEL character
+        KeyCode::Esc => Some(vec![0x1B]),
+        // Arrow keys - ANSI escape sequences
+        KeyCode::Up => Some(b"\x1B[A".to_vec()),
+        KeyCode::Down => Some(b"\x1B[B".to_vec()),
+        KeyCode::Right => Some(b"\x1B[C".to_vec()),
+        KeyCode::Left => Some(b"\x1B[D".to_vec()),
+        // Home/End
+        KeyCode::Home => Some(b"\x1B[H".to_vec()),
+        KeyCode::End => Some(b"\x1B[F".to_vec()),
+        // Page Up/Down
+        KeyCode::PageUp => Some(b"\x1B[5~".to_vec()),
+        KeyCode::PageDown => Some(b"\x1B[6~".to_vec()),
+        // Insert/Delete
+        KeyCode::Insert => Some(b"\x1B[2~".to_vec()),
+        KeyCode::Delete => Some(b"\x1B[3~".to_vec()),
+        // Function keys F1-F12
+        KeyCode::F(1) => Some(b"\x1BOP".to_vec()),
+        KeyCode::F(2) => Some(b"\x1BOQ".to_vec()),
+        KeyCode::F(3) => Some(b"\x1BOR".to_vec()),
+        KeyCode::F(4) => Some(b"\x1BOS".to_vec()),
+        KeyCode::F(5) => Some(b"\x1B[15~".to_vec()),
+        KeyCode::F(6) => Some(b"\x1B[17~".to_vec()),
+        KeyCode::F(7) => Some(b"\x1B[18~".to_vec()),
+        KeyCode::F(8) => Some(b"\x1B[19~".to_vec()),
+        KeyCode::F(9) => Some(b"\x1B[20~".to_vec()),
+        KeyCode::F(10) => Some(b"\x1B[21~".to_vec()),
+        KeyCode::F(11) => Some(b"\x1B[23~".to_vec()),
+        KeyCode::F(12) => Some(b"\x1B[24~".to_vec()),
+        _ => None,
     }
 }
 
@@ -1360,340 +705,193 @@ fn main() {
 mod tests {
     use super::*;
 
-    // Opacity parsing tests
-
     #[test]
-    fn test_parse_opacity_valid() {
-        assert_eq!(parse_opacity("0.3").unwrap(), 0.3);
-        assert_eq!(parse_opacity("0.0").unwrap(), 0.0);
-        assert_eq!(parse_opacity("1.0").unwrap(), 1.0);
-        assert_eq!(parse_opacity("0.5").unwrap(), 0.5);
+    fn test_key_event_to_bytes_regular_char() {
+        let event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert_eq!(key_event_to_bytes(event), Some(vec![b'a']));
     }
 
     #[test]
-    fn test_parse_opacity_boundaries() {
-        // At boundaries should work
-        assert!(parse_opacity("0.0").is_ok());
-        assert!(parse_opacity("1.0").is_ok());
-        // Just outside boundaries should fail
-        assert!(parse_opacity("-0.1").is_err());
-        assert!(parse_opacity("1.1").is_err());
+    fn test_key_event_to_bytes_ctrl_c() {
+        let event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(key_event_to_bytes(event), Some(vec![0x03])); // ETX
     }
 
     #[test]
-    fn test_parse_opacity_invalid_input() {
-        assert!(parse_opacity("not_a_number").is_err());
-        assert!(parse_opacity("").is_err());
-        assert!(parse_opacity("abc").is_err());
+    fn test_key_event_to_bytes_ctrl_d() {
+        let event = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        assert_eq!(key_event_to_bytes(event), Some(vec![0x04])); // EOT
     }
 
     #[test]
-    fn test_parse_opacity_out_of_range() {
-        let err = parse_opacity("2.0").unwrap_err();
-        assert!(err.contains("must be between 0.0 and 1.0"));
-        assert!(err.contains("2"));
-    }
-
-    // Noise gate threshold parsing tests
-
-    #[test]
-    fn test_parse_noise_gate_threshold_valid() {
-        assert_eq!(parse_noise_gate_threshold("0.01").unwrap(), 0.01);
-        assert_eq!(parse_noise_gate_threshold("0.0").unwrap(), 0.0);
-        assert_eq!(parse_noise_gate_threshold("1.0").unwrap(), 1.0);
-        assert_eq!(parse_noise_gate_threshold("0.05").unwrap(), 0.05);
+    fn test_key_event_to_bytes_ctrl_z() {
+        let event = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
+        assert_eq!(key_event_to_bytes(event), Some(vec![0x1A])); // SUB
     }
 
     #[test]
-    fn test_parse_noise_gate_threshold_boundaries() {
-        // At boundaries should work
-        assert!(parse_noise_gate_threshold("0.0").is_ok());
-        assert!(parse_noise_gate_threshold("1.0").is_ok());
-        // Just outside boundaries should fail
-        assert!(parse_noise_gate_threshold("-0.1").is_err());
-        assert!(parse_noise_gate_threshold("1.1").is_err());
+    fn test_key_event_to_bytes_enter() {
+        let event = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(key_event_to_bytes(event), Some(vec![b'\r']));
     }
 
     #[test]
-    fn test_parse_noise_gate_threshold_invalid_input() {
-        assert!(parse_noise_gate_threshold("not_a_number").is_err());
-        assert!(parse_noise_gate_threshold("").is_err());
-        assert!(parse_noise_gate_threshold("abc").is_err());
+    fn test_key_event_to_bytes_backspace() {
+        let event = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!(key_event_to_bytes(event), Some(vec![0x7F]));
     }
 
     #[test]
-    fn test_parse_noise_gate_threshold_out_of_range() {
-        let err = parse_noise_gate_threshold("2.0").unwrap_err();
-        assert!(err.contains("must be between 0.0 and 1.0"));
-        assert!(err.contains("2"));
-    }
-
-    // CLI logic tests
-
-    #[test]
-    fn test_no_effects_overrides_effect() {
-        // Simulate the behavior in main: --no-effects should override --effect
-        let original_effect = VideoEffect::Cyberpunk;
-        let no_effects = true;
-
-        // This mirrors the logic in main()
-        let final_effect = if no_effects { VideoEffect::None } else { original_effect };
-
-        assert_eq!(final_effect, VideoEffect::None);
+    fn test_key_event_to_bytes_arrow_up() {
+        let event = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(key_event_to_bytes(event), Some(b"\x1B[A".to_vec()));
     }
 
     #[test]
-    fn test_vignette_default_logic() {
-        // Test the vignette defaulting logic (mirrors main() behavior)
-
-        // When effect is None, no_vignette=false, no explicit vignette -> false
-        let effect = VideoEffect::None;
-        let no_vignette = false;
-        let explicit_vignette = false;
-        let vignette = if no_vignette { false } else if explicit_vignette { true } else { effect != VideoEffect::None };
-        assert!(!vignette, "Vignette should be off when effect is None");
-
-        // When effect is Cyberpunk, no_vignette=false, no explicit vignette -> true
-        let effect = VideoEffect::Cyberpunk;
-        let vignette = if no_vignette { false } else if explicit_vignette { true } else { effect != VideoEffect::None };
-        assert!(vignette, "Vignette should be on when effect is Cyberpunk");
-
-        // When no_vignette=true, even with effect -> false
-        let no_vignette = true;
-        let vignette = if no_vignette { false } else if explicit_vignette { true } else { effect != VideoEffect::None };
-        assert!(!vignette, "Vignette should be off when --no-vignette is set");
-
-        // When explicit vignette=true, even without effect -> true
-        let no_vignette = false;
-        let explicit_vignette = true;
-        let effect = VideoEffect::None;
-        let vignette = if no_vignette { false } else if explicit_vignette { true } else { effect != VideoEffect::None };
-        assert!(vignette, "Vignette should be on when explicitly enabled");
-    }
-
-    // Overlay toggle tests
-
-    #[test]
-    fn test_no_live_badge_overrides_live() {
-        // Simulate the behavior in main(): --no-live-badge overrides --live
-        let live = true;
-        let no_live_badge = true;
-
-        // This mirrors the logic in main()
-        let live_badge = live && !no_live_badge;
-
-        assert!(!live_badge, "--no-live-badge should disable LIVE badge");
+    fn test_key_event_to_bytes_arrow_down() {
+        let event = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(key_event_to_bytes(event), Some(b"\x1B[B".to_vec()));
     }
 
     #[test]
-    fn test_live_badge_enabled_when_live_set() {
-        // --live enables it, no --no-live-badge
-        let live = true;
-        let no_live_badge = false;
-
-        let live_badge = live && !no_live_badge;
-
-        assert!(live_badge, "LIVE badge should be enabled when --live is set");
+    fn test_key_event_to_bytes_arrow_left() {
+        let event = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        assert_eq!(key_event_to_bytes(event), Some(b"\x1B[D".to_vec()));
     }
 
     #[test]
-    fn test_live_badge_disabled_by_default() {
-        // Neither --live nor --no-live-badge
-        let live = false;
-        let no_live_badge = false;
-
-        let live_badge = live && !no_live_badge;
-
-        assert!(!live_badge, "LIVE badge should be off by default");
+    fn test_key_event_to_bytes_arrow_right() {
+        let event = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        assert_eq!(key_event_to_bytes(event), Some(b"\x1B[C".to_vec()));
     }
 
     #[test]
-    fn test_no_timestamp_overrides_timestamp() {
-        // Simulate the behavior in main(): --no-timestamp overrides --timestamp
-        let timestamp_flag = true;
-        let no_timestamp = true;
-
-        // This mirrors the logic in main()
-        let timestamp = timestamp_flag && !no_timestamp;
-
-        assert!(!timestamp, "--no-timestamp should disable timestamp");
+    fn test_key_event_to_bytes_escape() {
+        let event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(key_event_to_bytes(event), Some(vec![0x1B]));
     }
 
     #[test]
-    fn test_timestamp_enabled_when_flag_set() {
-        // --timestamp enables it, no --no-timestamp
-        let timestamp_flag = true;
-        let no_timestamp = false;
-
-        let timestamp = timestamp_flag && !no_timestamp;
-
-        assert!(timestamp, "Timestamp should be enabled when --timestamp is set");
+    fn test_key_event_to_bytes_tab() {
+        let event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(key_event_to_bytes(event), Some(vec![b'\t']));
     }
 
     #[test]
-    fn test_timestamp_disabled_by_default() {
-        // Neither --timestamp nor --no-timestamp
-        let timestamp_flag = false;
-        let no_timestamp = false;
+    fn test_key_event_to_bytes_alt_c() {
+        let event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT);
+        assert_eq!(key_event_to_bytes(event), Some(vec![0x1B, b'c']));
+    }
 
-        let timestamp = timestamp_flag && !no_timestamp;
+    // ==================== Hotkey Handling Tests ====================
 
-        assert!(!timestamp, "Timestamp should be off by default");
+    #[test]
+    fn test_handle_key_event_alt_c_toggles_visibility() {
+        let mut modal = CameraModal::new();
+        assert!(!modal.visible);
+
+        // Alt+C should toggle visibility
+        let event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT);
+        let action = handle_key_event(event, &mut modal);
+        assert!(matches!(action, KeyAction::Handled));
+        assert!(modal.visible);
+
+        // Alt+C again should toggle back
+        let action2 = handle_key_event(event, &mut modal);
+        assert!(matches!(action2, KeyAction::Handled));
+        assert!(!modal.visible);
     }
 
     #[test]
-    fn test_overlay_toggles_independent() {
-        // Test that LIVE badge and timestamp toggles work independently
-        // --live enabled, --no-timestamp enabled
-        let live = true;
-        let no_live_badge = false;
-        let timestamp_flag = true;
-        let no_timestamp = true;
+    fn test_handle_key_event_alt_c_uppercase() {
+        let mut modal = CameraModal::new();
+        assert!(!modal.visible);
 
-        let live_badge = live && !no_live_badge;
-        let timestamp = timestamp_flag && !no_timestamp;
-
-        assert!(live_badge, "LIVE badge should be enabled");
-        assert!(!timestamp, "Timestamp should be disabled by --no-timestamp");
-    }
-
-    // Resolution and framerate parsing tests
-
-    #[test]
-    fn test_parse_resolution_valid() {
-        assert_eq!(parse_resolution("1920x1080").unwrap(), (1920, 1080));
-        assert_eq!(parse_resolution("1280x720").unwrap(), (1280, 720));
-        assert_eq!(parse_resolution("3840x2160").unwrap(), (3840, 2160));
+        // Alt+C (uppercase) should also work
+        let event = KeyEvent::new(KeyCode::Char('C'), KeyModifiers::ALT);
+        let action = handle_key_event(event, &mut modal);
+        assert!(matches!(action, KeyAction::Handled));
+        assert!(modal.visible);
     }
 
     #[test]
-    fn test_parse_resolution_invalid_format() {
-        assert!(parse_resolution("1920").is_err());
-        assert!(parse_resolution("1920:1080").is_err());
-        assert!(parse_resolution("1920-1080").is_err());
-        assert!(parse_resolution("widthxheight").is_err());
+    fn test_handle_key_event_alt_p_cycles_position() {
+        let mut modal = CameraModal::new();
+        assert_eq!(modal.position, terminal::ModalPosition::BottomRight);
+
+        // Alt+P should cycle position
+        let event = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT);
+        let action = handle_key_event(event, &mut modal);
+        assert!(matches!(action, KeyAction::Handled));
+        assert_eq!(modal.position, terminal::ModalPosition::BottomLeft);
     }
 
     #[test]
-    fn test_parse_resolution_zero_values() {
-        assert!(parse_resolution("0x1080").is_err());
-        assert!(parse_resolution("1920x0").is_err());
+    fn test_handle_key_event_alt_s_cycles_size() {
+        let mut modal = CameraModal::new();
+        assert_eq!(modal.size, terminal::ModalSize::Small);
+
+        // Alt+S should cycle size
+        let event = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT);
+        let action = handle_key_event(event, &mut modal);
+        assert!(matches!(action, KeyAction::Handled));
+        assert_eq!(modal.size, terminal::ModalSize::Medium);
     }
 
     #[test]
-    fn test_parse_resolution_too_large() {
-        assert!(parse_resolution("10000x10000").is_err());
+    fn test_handle_key_event_alt_a_cycles_charset() {
+        let mut modal = CameraModal::new();
+        assert_eq!(modal.charset, ascii::CharSet::Standard);
+
+        // Alt+A should cycle charset
+        let event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT);
+        let action = handle_key_event(event, &mut modal);
+        assert!(matches!(action, KeyAction::Handled));
+        assert_eq!(modal.charset, ascii::CharSet::Blocks);
     }
 
     #[test]
-    fn test_parse_framerate_valid() {
-        assert_eq!(parse_framerate("30").unwrap(), 30);
-        assert_eq!(parse_framerate("60").unwrap(), 60);
-        assert_eq!(parse_framerate("1").unwrap(), 1);
-        assert_eq!(parse_framerate("120").unwrap(), 120);
+    fn test_handle_key_event_other_alt_keys_forwarded() {
+        let mut modal = CameraModal::new();
+
+        // Alt+X (not a hotkey) should be forwarded to PTY
+        let event = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT);
+        let action = handle_key_event(event, &mut modal);
+        match action {
+            KeyAction::Forward(bytes) => {
+                assert_eq!(bytes, vec![0x1B, b'x']); // ESC + x
+            }
+            _ => panic!("Expected Forward action for Alt+X"),
+        }
     }
 
     #[test]
-    fn test_parse_framerate_invalid() {
-        assert!(parse_framerate("0").is_err());
-        assert!(parse_framerate("121").is_err());
-        assert!(parse_framerate("-1").is_err());
-        assert!(parse_framerate("abc").is_err());
-    }
+    fn test_handle_key_event_regular_keys_forwarded() {
+        let mut modal = CameraModal::new();
 
-    // .env file loading tests
-
-    #[test]
-    fn test_env_var_accessible_after_dotenv() {
-        // Test that dotenv::dotenv() doesn't panic and env vars are accessible
-        // Note: dotenv::dotenv() returns Err if .env doesn't exist, which is fine
-        let _ = dotenv::dotenv();
-
-        // After dotenv loads, std::env::var should work
-        // (may or may not find FAL_API_KEY depending on test environment)
-        let _result = std::env::var("FAL_API_KEY");
-        // We just verify it doesn't panic - Ok or Err are both valid
+        // Regular 'a' (no modifier) should be forwarded
+        let event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        let action = handle_key_event(event, &mut modal);
+        match action {
+            KeyAction::Forward(bytes) => {
+                assert_eq!(bytes, vec![b'a']);
+            }
+            _ => panic!("Expected Forward action for regular 'a'"),
+        }
     }
 
     #[test]
-    fn test_env_var_not_overridden() {
-        // Set an env var before loading dotenv
-        std::env::set_var("TEST_EXISTING_VAR", "original_value");
+    fn test_handle_key_event_ctrl_keys_forwarded() {
+        let mut modal = CameraModal::new();
 
-        // Load dotenv (uses default behavior which doesn't override existing vars)
-        let _ = dotenv::dotenv();
-
-        // Verify existing env var was not overridden
-        assert_eq!(
-            std::env::var("TEST_EXISTING_VAR").unwrap(),
-            "original_value",
-            "Existing env vars should not be overridden by dotenv"
-        );
-
-        // Clean up
-        std::env::remove_var("TEST_EXISTING_VAR");
-    }
-
-    #[test]
-    fn test_fal_api_key_detection() {
-        // Test that we can check for FAL_API_KEY presence
-        // First ensure it's not set
-        std::env::remove_var("FAL_API_KEY");
-
-        // Check returns Err when not set
-        assert!(
-            std::env::var("FAL_API_KEY").is_err(),
-            "FAL_API_KEY should not be set initially"
-        );
-
-        // Set it and verify we can read it
-        std::env::set_var("FAL_API_KEY", "test_key_12345");
-        assert_eq!(
-            std::env::var("FAL_API_KEY").unwrap(),
-            "test_key_12345",
-            "FAL_API_KEY should be readable after setting"
-        );
-
-        // Clean up
-        std::env::remove_var("FAL_API_KEY");
-    }
-
-    #[test]
-    fn test_fal_disabled_when_api_key_missing() {
-        // AC: fal features disabled but app continues when FAL_API_KEY not set
-        // This tests the logic that disables fal when API key is missing
-
-        // Save original value
-        let original = std::env::var("FAL_API_KEY").ok();
-
-        // Remove API key
-        std::env::remove_var("FAL_API_KEY");
-
-        // Simulate the logic from main.rs: if --fal is enabled but key is missing, fal is disabled
-        let fal_requested = true;
-        let fal_enabled = if fal_requested && std::env::var("FAL_API_KEY").is_err() {
-            false // Disable fal features but continue
-        } else {
-            fal_requested
-        };
-
-        assert!(!fal_enabled, "fal should be disabled when API key is missing");
-
-        // Now test with API key set
-        std::env::set_var("FAL_API_KEY", "test_key");
-        let fal_enabled = if fal_requested && std::env::var("FAL_API_KEY").is_err() {
-            false
-        } else {
-            fal_requested
-        };
-
-        assert!(fal_enabled, "fal should be enabled when API key is set");
-
-        // Restore original value
-        if let Some(val) = original {
-            std::env::set_var("FAL_API_KEY", val);
-        } else {
-            std::env::remove_var("FAL_API_KEY");
+        // Ctrl+C should be forwarded (not our hotkey)
+        let event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let action = handle_key_event(event, &mut modal);
+        match action {
+            KeyAction::Forward(bytes) => {
+                assert_eq!(bytes, vec![0x03]); // ETX (Ctrl+C)
+            }
+            _ => panic!("Expected Forward action for Ctrl+C"),
         }
     }
 }

@@ -1,104 +1,95 @@
 # space-recorder
 
-A Rust CLI tool for compositing video streams with ghost overlays and AI-generated effects. Built for coding streamers who want to share their terminal with a subtle webcam presence in video calls.
+ASCII camera overlay for terminal streaming. A TUI app that renders your webcam as ASCII art while hosting a fully functional shell.
 
 ## Features
 
-- **Ghost Overlay** - Full-screen webcam at low opacity, with your terminal showing through
-- **AI Video Overlays** - Generate ambient video backgrounds from text prompts via [fal.ai](https://fal.ai)
-- **Cyberpunk Effects** - Color grading and neon aesthetics
-- **Live Indicators** - LIVE badge and timestamp overlays
-- **Hotkey Controls** - Adjust opacity on the fly during your stream
-
-## Requirements
-
-- macOS (uses AVFoundation for capture)
-- FFmpeg
-- mpv (for preview window)
-- Rust 1.70+
+- Real-time webcam to ASCII art conversion
+- Multiple character sets: standard, blocks, minimal, braille
+- Adjustable overlay position, size, and transparency
+- Full shell passthrough with proper PTY handling
+- Hotkey controls for live adjustments
+- Color support with 24-bit true color
+- macOS native camera support via AVFoundation
 
 ## Installation
 
-```bash
-git clone https://github.com/PepijnSenders/space-recorder.git
-cd space-recorder
-cargo build --release
-```
-
-## Quick Start
+### Homebrew (macOS)
 
 ```bash
-# Start with Terminal.app and webcam ghost overlay at 30% opacity
-space-recorder start --window "Terminal" --opacity 0.3 --effect cyberpunk
-
-# Adjust opacity during stream with +/- keys
-# Share the mpv preview window in Google Meet, Zoom, etc.
+brew install PepijnSenders/tap/space-recorder
 ```
 
-## AI Video Overlays (fal.ai)
-
-Generate AI video overlays from text prompts during your stream.
-
-### Setup
+### From source
 
 ```bash
-export FAL_API_KEY="your-api-key-here"
+cargo install --path .
 ```
 
-### Usage
+## Usage
 
 ```bash
-# Start with fal.ai overlay enabled
-space-recorder start --window Terminal --fal
+# Start with defaults
+space-recorder
 
-# Pre-generate videos to warm the cache
-space-recorder fal-generate "cyberpunk cityscape"
+# List available cameras
+space-recorder list-cameras
 
-# Manage cache
-space-recorder fal-cache list
-space-recorder fal-cache clear
+# Customize position and size
+space-recorder --position top-right --size medium
+
+# Use braille characters for higher resolution
+space-recorder --charset braille
+
+# Mirror mode (selfie view)
+space-recorder --mirror
+
+# Start with camera hidden
+space-recorder --no-camera
 ```
 
-### Prompt Commands
+## Hotkeys
 
-While streaming with `--fal` enabled:
+| Key | Action |
+|-----|--------|
+| `Alt+C` | Toggle camera visibility |
+| `Alt+P` | Cycle position (corners + center) |
+| `Alt+S` | Cycle size (small → medium → large → xlarge → huge) |
+| `Alt+A` | Cycle ASCII charset |
+| `Alt+T` | Cycle transparency level |
 
-| Command | Description |
-|---------|-------------|
-| `<text>` | Generate video from prompt |
-| `/clear` | Remove the AI overlay |
-| `/opacity <0.0-1.0>` | Adjust AI overlay opacity |
+All other keys pass through to the shell.
+
+## Options
+
+```
+-s, --shell <SHELL>      Shell to spawn (default: $SHELL or /bin/zsh)
+    --camera <INDEX>     Camera device index [default: 0]
+    --no-camera          Disable camera on start
+-p, --position <POS>     Position: top-left, top-right, bottom-left, bottom-right, center [default: bottom-right]
+    --size <SIZE>        Size: small, medium, large, xlarge, huge [default: small]
+    --charset <CHARSET>  Character set: standard, blocks, minimal, braille [default: standard]
+    --mirror             Mirror camera horizontally
+    --invert             Invert brightness (for light terminals)
+    --no-status          Hide status bar
+-c, --config <PATH>      Config file path
+```
 
 ## Configuration
 
-Create `~/.config/space-recorder/config.toml`:
+Create a config file with defaults:
 
-```toml
-[fal]
-enabled = true
-opacity = 0.5
-
-[fal.cache]
-directory = "~/.cache/space-recorder/fal-videos"
-max_size_mb = 2048
+```bash
+space-recorder config init
 ```
 
-## How It Works
+Config location: `~/.config/space-recorder/config.toml`
 
-The tool uses FFmpeg to composite video streams:
+## Requirements
 
-```
-Terminal Window ──┐
-                  ├── FFmpeg Compositor ── mpv Preview ── Share in Video Call
-Webcam (ghost) ───┤
-AI Overlay ───────┘
-```
-
-The ghost effect uses FFmpeg's `colorchannelmixer=aa=0.3` for alpha transparency.
-
-## Documentation
-
-See [specs/](./specs/) for detailed architecture and implementation specs.
+- macOS (AVFoundation for camera access)
+- Camera permissions granted in System Settings > Privacy & Security > Camera
+- A terminal with true color support for best results
 
 ## License
 
