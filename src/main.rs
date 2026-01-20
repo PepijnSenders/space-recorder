@@ -20,7 +20,7 @@ mod terminal;
 
 use camera::{CameraCapture, CameraSettings, Resolution};
 use cli::{Args, Command};
-use input::{handle_key_event, KeyAction};
+use input::{KeyAction, handle_key_event};
 use pty::{PtyHost, PtySize};
 use terminal::{AsciiFrame, CameraModal, ModalPosition, ModalSize, StatusBar};
 
