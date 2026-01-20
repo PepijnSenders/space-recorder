@@ -1,23 +1,14 @@
-//! space-recorder: TUI app that renders webcam as ASCII art overlay while hosting a shell
+//! space-recorder: TUI app that renders webcam as ASCII art overlay while hosting a shell.
 
 use clap::Parser;
 use std::io::Read;
 use tokio::sync::mpsc;
 
-mod ascii;
-mod camera;
-mod cli;
-mod config;
-mod event_loop;
-mod input;
-mod pty;
-mod renderer;
-mod terminal;
-
-use camera::{CameraCapture, CameraSettings, Resolution};
-use cli::{Args, Command};
-use pty::{PtyHost, PtySize};
-use terminal::{CameraModal, StatusBar};
+use space_recorder::camera::{CameraCapture, CameraSettings, Resolution};
+use space_recorder::cli::{self, Args, Command};
+use space_recorder::pty::{self, PtyHost, PtySize};
+use space_recorder::terminal::{self, CameraModal, StatusBar};
+use space_recorder::event_loop;
 
 #[tokio::main]
 async fn main() {
