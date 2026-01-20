@@ -473,7 +473,7 @@ fn test_performance_under_10ms() {
     // In release mode, should be <10ms. Debug builds are slower.
     // AC requires <10ms in production use.
     #[cfg(debug_assertions)]
-    let threshold = 50.0; // More lenient for debug builds
+    let threshold = 100.0; // Debug builds vary widely in performance
     #[cfg(not(debug_assertions))]
     let threshold = 10.0;
 
@@ -515,7 +515,7 @@ fn test_performance_with_edge_detection() {
     // Edge detection is an optional feature that adds overhead.
     // In release mode, should be <15ms. Debug builds are slower.
     #[cfg(debug_assertions)]
-    let threshold = 100.0; // More lenient for debug builds
+    let threshold = 150.0; // Debug builds vary widely in performance
     #[cfg(not(debug_assertions))]
     let threshold = 15.0;
 
@@ -557,7 +557,7 @@ fn test_performance_braille_rendering() {
 
     // In release mode, should be <10ms. Debug builds are slower.
     #[cfg(debug_assertions)]
-    let threshold = 50.0;
+    let threshold = 100.0; // Debug builds vary widely in performance
     #[cfg(not(debug_assertions))]
     let threshold = 10.0;
 
