@@ -6,7 +6,7 @@
 
 Before starting, run these Explore subagents **in parallel** to gather context:
 
-1. `specs/` directory → return summary of all 7 spec files
+1. `specs/` directory → return summary of all 5 spec files
 2. `plan.md` → return summary of phases and current task status
 3. `progress.txt` → return summary of completed work
 
@@ -27,9 +27,9 @@ Phase: [phase name]
 Task: [task title]
 
 [✓] Implemented X
-[✗] cargo check failed: Y
+[✗] check failed: Y
     Fix: Z
-[✓] cargo check passed
+[✓] check passed
 
 ✅ VALIDATED - Task complete
 ```
@@ -39,4 +39,14 @@ Task: [task title]
 - ONE task per session
 - ALL acceptance criteria must pass
 - Log EVERY validation result
-- Stop at "Final MVP Verification" (skip Post-MVP Backlog)
+- Stop at "Final Verification"
+
+## Tech Stack
+
+- **Language**: Rust
+- **TUI**: ratatui + crossterm
+- **PTY**: portable-pty
+- **Camera**: nokhwa (AVFoundation on macOS)
+- **Async**: tokio
+- **CLI**: clap
+- **Config**: toml + serde
