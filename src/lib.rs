@@ -6,6 +6,9 @@
 //! - ASCII rendering (grayscale, downsample, charset)
 //! - TUI (ratatui, modal, hotkeys) [future]
 
+// Allow unused code during early development - many APIs are for future use
+#![allow(dead_code)]
+
 pub mod ascii;
 pub mod camera;
 pub mod pty;

@@ -1,5 +1,8 @@
 //! space-recorder: TUI app that renders webcam as ASCII art overlay while hosting a shell
 
+// Allow unused code during early development - many APIs are for future use
+#![allow(dead_code)]
+
 use clap::Parser;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::StreamExt;
@@ -331,88 +334,87 @@ async fn run_async_loop(
 
             // Camera frame capture and rendering
             _ = camera_interval.tick() => {
-                if camera_modal.visible {
-                    if let Some(ref cam) = camera {
-                        if let Some(frame) = cam.get_frame() {
-                            // Get modal dimensions
-                            let (modal_width, modal_height) = camera_modal.size.inner_dimensions();
+                if camera_modal.visible
+                    && let Some(ref cam) = camera
+                    && let Some(frame) = cam.get_frame()
+                {
+                    // Get modal dimensions
+                    let (modal_width, modal_height) = camera_modal.size.inner_dimensions();
 
-                            // Downsample colors for the frame
-                            ascii::downsample_colors_into(
-                                &frame,
-                                modal_width,
-                                modal_height,
-                                &mut color_buffer,
-                            );
+                    // Downsample colors for the frame
+                    ascii::downsample_colors_into(
+                        &frame,
+                        modal_width,
+                        modal_height,
+                        &mut color_buffer,
+                    );
 
-                            // Convert colors to terminal CellColor format
-                            let terminal_colors: Vec<terminal::CellColor> = color_buffer
-                                .iter()
-                                .map(|c| terminal::CellColor { r: c.r, g: c.g, b: c.b })
-                                .collect();
+                    // Convert colors to terminal CellColor format
+                    let terminal_colors: Vec<terminal::CellColor> = color_buffer
+                        .iter()
+                        .map(|c| terminal::CellColor { r: c.r, g: c.g, b: c.b })
+                        .collect();
 
-                            // Convert frame to ASCII
-                            let ascii_frame = if camera_modal.charset.is_braille() {
-                                // Braille rendering (2x4 subpixel resolution)
-                                ascii::to_grayscale_into(&frame, &mut gray_buffer);
-                                let chars = ascii::render_braille(
-                                    &gray_buffer,
-                                    frame.width,
-                                    frame.height,
-                                    modal_width,
-                                    modal_height,
-                                    128, // threshold
-                                    invert,
-                                );
-                                AsciiFrame::from_chars_colored(chars, terminal_colors, modal_width, modal_height)
-                            } else {
-                                // Standard/blocks/minimal charset rendering
-                                ascii::to_grayscale_into(&frame, &mut gray_buffer);
-                                ascii::downsample_into(
-                                    &gray_buffer,
-                                    frame.width,
-                                    frame.height,
-                                    modal_width,
-                                    modal_height,
-                                    &mut brightness_buffer,
-                                );
-                                ascii::map_to_chars_into(
-                                    &brightness_buffer,
-                                    camera_modal.charset.chars(),
-                                    invert,
-                                    &mut char_buffer,
-                                );
-                                AsciiFrame::from_chars_colored(char_buffer.clone(), terminal_colors, modal_width, modal_height)
-                            };
+                    // Convert frame to ASCII
+                    let ascii_frame = if camera_modal.charset.is_braille() {
+                        // Braille rendering (2x4 subpixel resolution)
+                        ascii::to_grayscale_into(&frame, &mut gray_buffer);
+                        let chars = ascii::render_braille(
+                            &gray_buffer,
+                            frame.width,
+                            frame.height,
+                            modal_width,
+                            modal_height,
+                            128, // threshold
+                            invert,
+                        );
+                        AsciiFrame::from_chars_colored(chars, terminal_colors, modal_width, modal_height)
+                    } else {
+                        // Standard/blocks/minimal charset rendering
+                        ascii::to_grayscale_into(&frame, &mut gray_buffer);
+                        ascii::downsample_into(
+                            &gray_buffer,
+                            frame.width,
+                            frame.height,
+                            modal_width,
+                            modal_height,
+                            &mut brightness_buffer,
+                        );
+                        ascii::map_to_chars_into(
+                            &brightness_buffer,
+                            camera_modal.charset.chars(),
+                            invert,
+                            &mut char_buffer,
+                        );
+                        AsciiFrame::from_chars_colored(char_buffer.clone(), terminal_colors, modal_width, modal_height)
+                    };
 
-                            camera_modal.set_frame(ascii_frame);
+                    camera_modal.set_frame(ascii_frame);
 
-                            // Check if modal size/position changed - need to clear old area
-                            let size_changed = prev_modal_size != camera_modal.size;
-                            let position_changed = prev_modal_position != camera_modal.position;
+                    // Check if modal size/position changed - need to clear old area
+                    let size_changed = prev_modal_size != camera_modal.size;
+                    let position_changed = prev_modal_position != camera_modal.position;
 
-                            if size_changed || position_changed {
-                                // Clear the old modal area
-                                clear_modal_area(
-                                    &mut stdout,
-                                    prev_modal_size,
-                                    prev_modal_position,
-                                    term_cols,
-                                    term_rows,
-                                )?;
-                                prev_modal_size = camera_modal.size;
-                                prev_modal_position = camera_modal.position;
-                            }
-
-                            // Render the overlay
-                            render_camera_overlay(
-                                &mut stdout,
-                                camera_modal,
-                                term_cols,
-                                term_rows,
-                            )?;
-                        }
+                    if size_changed || position_changed {
+                        // Clear the old modal area
+                        clear_modal_area(
+                            &mut stdout,
+                            prev_modal_size,
+                            prev_modal_position,
+                            term_cols,
+                            term_rows,
+                        )?;
+                        prev_modal_size = camera_modal.size;
+                        prev_modal_position = camera_modal.position;
                     }
+
+                    // Render the overlay
+                    render_camera_overlay(
+                        &mut stdout,
+                        camera_modal,
+                        term_cols,
+                        term_rows,
+                    )?;
                 }
             }
         }
