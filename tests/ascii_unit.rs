@@ -539,7 +539,10 @@ fn test_map_gradient_produces_ordered_chars() {
     let mut prev_idx = 0;
     for c in &chars {
         let idx = STANDARD_CHARSET.iter().position(|&x| x == *c).unwrap();
-        assert!(idx >= prev_idx, "Character indices should be non-decreasing");
+        assert!(
+            idx >= prev_idx,
+            "Character indices should be non-decreasing"
+        );
         prev_idx = idx;
     }
 }

@@ -86,7 +86,7 @@ async fn main() {
         let settings = CameraSettings {
             device_index: args.camera,
             resolution: Resolution::MEDIUM, // 640x480 - good balance of speed and quality
-            fps: 15, // Lower FPS for ASCII rendering is fine
+            fps: 15,                        // Lower FPS for ASCII rendering is fine
             mirror: args.mirror,
         };
         match CameraCapture::open(settings) {
@@ -454,21 +454,21 @@ fn clear_modal_area(
     let modal_rect = temp_modal.calculate_rect(container);
 
     let mut output = String::new();
-    output.push_str("\x1b[s");  // Save cursor
-    output.push_str("\x1b[?25l");  // Hide cursor
+    output.push_str("\x1b[s"); // Save cursor
+    output.push_str("\x1b[?25l"); // Hide cursor
 
     // Fill entire modal area with spaces
     for row in 0..modal_rect.height {
-        let y = modal_rect.y + row + 1;  // 1-based
-        let x = modal_rect.x + 1;  // 1-based
+        let y = modal_rect.y + row + 1; // 1-based
+        let x = modal_rect.x + 1; // 1-based
         output.push_str(&format!("\x1b[{};{}H", y, x));
         for _ in 0..modal_rect.width {
             output.push(' ');
         }
     }
 
-    output.push_str("\x1b[?25h");  // Show cursor
-    output.push_str("\x1b[u");  // Restore cursor
+    output.push_str("\x1b[?25h"); // Show cursor
+    output.push_str("\x1b[u"); // Restore cursor
 
     stdout.write_all(output.as_bytes())?;
     stdout.flush()?;
@@ -515,10 +515,26 @@ fn render_camera_overlay(
     output.push_str("\x1b[?25l");
 
     // Calculate inner area (accounting for border if present)
-    let inner_x = if modal.border { modal_rect.x + 1 } else { modal_rect.x };
-    let inner_y = if modal.border { modal_rect.y + 1 } else { modal_rect.y };
-    let inner_width = if modal.border { modal_rect.width.saturating_sub(2) } else { modal_rect.width };
-    let inner_height = if modal.border { modal_rect.height.saturating_sub(2) } else { modal_rect.height };
+    let inner_x = if modal.border {
+        modal_rect.x + 1
+    } else {
+        modal_rect.x
+    };
+    let inner_y = if modal.border {
+        modal_rect.y + 1
+    } else {
+        modal_rect.y
+    };
+    let inner_width = if modal.border {
+        modal_rect.width.saturating_sub(2)
+    } else {
+        modal_rect.width
+    };
+    let inner_height = if modal.border {
+        modal_rect.height.saturating_sub(2)
+    } else {
+        modal_rect.height
+    };
 
     // Draw border if enabled
     if modal.border {
@@ -531,7 +547,11 @@ fn render_camera_overlay(
         output.push('┐');
 
         // Bottom border
-        output.push_str(&format!("\x1b[{};{}H", modal_rect.y + modal_rect.height, modal_rect.x + 1));
+        output.push_str(&format!(
+            "\x1b[{};{}H",
+            modal_rect.y + modal_rect.height,
+            modal_rect.x + 1
+        ));
         output.push('└');
         for _ in 0..inner_width {
             output.push('─');
@@ -560,11 +580,12 @@ fn render_camera_overlay(
     // transparency=80 -> threshold=153 (only draw very dark pixels)
     // transparency=100 -> threshold=0 (everything transparent)
     let max_brightness: u16 = 765; // 255 * 3
-    let brightness_threshold = (max_brightness as u32 * (100 - modal.transparency as u32) / 100) as u16;
+    let brightness_threshold =
+        (max_brightness as u32 * (100 - modal.transparency as u32) / 100) as u16;
 
     for (row, line) in lines.iter().enumerate().take(inner_height as usize) {
-        let y = inner_y + row as u16 + 1;  // +1 for 1-based ANSI coordinates
-        let base_x = inner_x + 1;  // +1 for 1-based ANSI coordinates
+        let y = inner_y + row as u16 + 1; // +1 for 1-based ANSI coordinates
+        let base_x = inner_x + 1; // +1 for 1-based ANSI coordinates
 
         let chars_to_write = line.len().min(inner_width as usize);
         let row_start = row * frame.width as usize;
@@ -593,7 +614,10 @@ fn render_camera_overlay(
                                 need_reposition = false;
                             }
                             // ANSI true color (24-bit): ESC[38;2;R;G;Bm for foreground
-                            output.push_str(&format!("\x1b[38;2;{};{};{}m", color.r, color.g, color.b));
+                            output.push_str(&format!(
+                                "\x1b[38;2;{};{};{}m",
+                                color.r, color.g, color.b
+                            ));
                         }
                     }
                 }
@@ -612,7 +636,7 @@ fn render_camera_overlay(
     }
 
     // Reset colors and show cursor
-    output.push_str("\x1b[0m");  // Reset all attributes
+    output.push_str("\x1b[0m"); // Reset all attributes
     output.push_str("\x1b[?25h");
 
     // Restore cursor position

@@ -159,7 +159,9 @@ pub fn list_cameras() {
                 println!("No cameras found.");
                 println!();
                 println!("Make sure your camera is connected and permissions are granted.");
-                println!("On macOS, grant access in System Settings > Privacy & Security > Camera.");
+                println!(
+                    "On macOS, grant access in System Settings > Privacy & Security > Camera."
+                );
             } else {
                 println!("Available cameras:");
                 for device in devices {
@@ -181,7 +183,10 @@ pub fn handle_config_action(action: ConfigAction) {
     match action {
         ConfigAction::Show => {
             println!("Current configuration:");
-            println!("  Shell: {}", std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string()));
+            println!(
+                "  Shell: {}",
+                std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
+            );
             println!("  Camera: 0");
             println!("  Position: bottom-right");
             println!("  Size: small");
@@ -394,7 +399,9 @@ mod tests {
     fn test_args_config_show_subcommand() {
         let args = Args::parse_from(["space-recorder", "config", "show"]);
         match args.command {
-            Some(Command::Config { action: ConfigAction::Show }) => (),
+            Some(Command::Config {
+                action: ConfigAction::Show,
+            }) => (),
             _ => panic!("Expected Config Show subcommand"),
         }
     }
@@ -403,7 +410,9 @@ mod tests {
     fn test_args_config_init_subcommand() {
         let args = Args::parse_from(["space-recorder", "config", "init"]);
         match args.command {
-            Some(Command::Config { action: ConfigAction::Init }) => (),
+            Some(Command::Config {
+                action: ConfigAction::Init,
+            }) => (),
             _ => panic!("Expected Config Init subcommand"),
         }
     }
@@ -412,11 +421,16 @@ mod tests {
     fn test_args_combined_options() {
         let args = Args::parse_from([
             "space-recorder",
-            "--shell", "/bin/zsh",
-            "--camera", "1",
-            "--position", "top-left",
-            "--size", "large",
-            "--charset", "braille",
+            "--shell",
+            "/bin/zsh",
+            "--camera",
+            "1",
+            "--position",
+            "top-left",
+            "--size",
+            "large",
+            "--charset",
+            "braille",
             "--mirror",
             "--invert",
             "--no-status",
@@ -435,10 +449,22 @@ mod tests {
 
     #[test]
     fn test_position_to_modal_position() {
-        assert_eq!(ModalPosition::from(Position::TopLeft), ModalPosition::TopLeft);
-        assert_eq!(ModalPosition::from(Position::TopRight), ModalPosition::TopRight);
-        assert_eq!(ModalPosition::from(Position::BottomLeft), ModalPosition::BottomLeft);
-        assert_eq!(ModalPosition::from(Position::BottomRight), ModalPosition::BottomRight);
+        assert_eq!(
+            ModalPosition::from(Position::TopLeft),
+            ModalPosition::TopLeft
+        );
+        assert_eq!(
+            ModalPosition::from(Position::TopRight),
+            ModalPosition::TopRight
+        );
+        assert_eq!(
+            ModalPosition::from(Position::BottomLeft),
+            ModalPosition::BottomLeft
+        );
+        assert_eq!(
+            ModalPosition::from(Position::BottomRight),
+            ModalPosition::BottomRight
+        );
         assert_eq!(ModalPosition::from(Position::Center), ModalPosition::Center);
     }
 
@@ -451,9 +477,21 @@ mod tests {
 
     #[test]
     fn test_charset_to_ascii_charset() {
-        assert_eq!(ascii::CharSet::from(CharacterSet::Standard), ascii::CharSet::Standard);
-        assert_eq!(ascii::CharSet::from(CharacterSet::Blocks), ascii::CharSet::Blocks);
-        assert_eq!(ascii::CharSet::from(CharacterSet::Minimal), ascii::CharSet::Minimal);
-        assert_eq!(ascii::CharSet::from(CharacterSet::Braille), ascii::CharSet::Braille);
+        assert_eq!(
+            ascii::CharSet::from(CharacterSet::Standard),
+            ascii::CharSet::Standard
+        );
+        assert_eq!(
+            ascii::CharSet::from(CharacterSet::Blocks),
+            ascii::CharSet::Blocks
+        );
+        assert_eq!(
+            ascii::CharSet::from(CharacterSet::Minimal),
+            ascii::CharSet::Minimal
+        );
+        assert_eq!(
+            ascii::CharSet::from(CharacterSet::Braille),
+            ascii::CharSet::Braille
+        );
     }
 }

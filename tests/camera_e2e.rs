@@ -5,7 +5,7 @@
 //! - Frames captured at reasonable rate (~15+ fps)
 //! - App handles missing camera gracefully
 
-use space_recorder::camera::{list_devices, CameraCapture, CameraError, CameraSettings};
+use space_recorder::camera::{CameraCapture, CameraError, CameraSettings, list_devices};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,7 +13,11 @@ use std::time::{Duration, Instant};
 #[test]
 fn test_list_devices_succeeds() {
     let result = list_devices();
-    assert!(result.is_ok(), "list_devices should not error: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "list_devices should not error: {:?}",
+        result.err()
+    );
 
     let devices = result.unwrap();
     println!("Found {} camera device(s)", devices.len());
@@ -40,13 +44,19 @@ fn test_camera_opens_without_error() {
 
     let mut camera = result.unwrap();
     println!("Camera opened successfully");
-    println!("  Settings: device_index={}, mirror={}",
-             camera.settings().device_index,
-             camera.settings().mirror);
+    println!(
+        "  Settings: device_index={}, mirror={}",
+        camera.settings().device_index,
+        camera.settings().mirror
+    );
 
     // Start capture to verify stream works
     let start_result = camera.start();
-    assert!(start_result.is_ok(), "Camera stream should start: {:?}", start_result.err());
+    assert!(
+        start_result.is_ok(),
+        "Camera stream should start: {:?}",
+        start_result.err()
+    );
 
     println!("  Actual resolution: {:?}", camera.actual_resolution());
     println!("  Actual FPS: {:?}", camera.actual_fps());
@@ -78,7 +88,10 @@ fn test_frame_capture_rate() {
     }
 
     let first_frame = camera.get_frame();
-    assert!(first_frame.is_some(), "Should have captured at least one frame");
+    assert!(
+        first_frame.is_some(),
+        "Should have captured at least one frame"
+    );
 
     // The camera reports 30 fps actual rate. Let's verify frames are being captured
     // by checking that we can get frames continuously over a period.
