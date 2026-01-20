@@ -53,7 +53,10 @@ fn test_camera_modal_initialization() {
     assert!(!modal.visible, "Modal should start hidden");
     assert_eq!(modal.position, ModalPosition::BottomRight);
     assert_eq!(modal.size, ModalSize::Small);
-    assert!(!modal.border, "Modal should start without border by default");
+    assert!(
+        !modal.border,
+        "Modal should start without border by default"
+    );
     assert_eq!(modal.charset, CharSet::Standard);
     assert!(modal.frame.is_none(), "No frame initially");
 }
