@@ -7,10 +7,10 @@
 //! - Performance: <10ms per frame
 
 use space_recorder::ascii::{
-    apply_edge_detection, calculate_dimensions, downsample, map_to_chars, render_braille,
-    to_grayscale, BLOCKS_CHARSET, MINIMAL_CHARSET, STANDARD_CHARSET,
+    BLOCKS_CHARSET, MINIMAL_CHARSET, STANDARD_CHARSET, apply_edge_detection, calculate_dimensions,
+    downsample, map_to_chars, render_braille, to_grayscale,
 };
-use space_recorder::camera::{list_devices, CameraCapture, CameraSettings, Frame, FrameFormat};
+use space_recorder::camera::{CameraCapture, CameraSettings, Frame, FrameFormat, list_devices};
 use std::collections::HashSet;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -51,7 +51,8 @@ fn make_test_frame(pattern: &str, width: u32, height: u32) -> Frame {
 
             for y in 0..height {
                 for x in 0..width {
-                    let dist = ((x as f32 - center_x).powi(2) + (y as f32 - center_y).powi(2)).sqrt();
+                    let dist =
+                        ((x as f32 - center_x).powi(2) + (y as f32 - center_y).powi(2)).sqrt();
                     // Bright at center, darker at edges (simulates face in frame)
                     let brightness = (255.0 * (1.0 - dist / max_dist)).max(0.0) as u8;
                     data.extend_from_slice(&[brightness, brightness, brightness]);
@@ -353,7 +354,8 @@ fn test_braille_charset_produces_output() {
 
     // Render with braille
     let gray = to_grayscale(&frame);
-    let braille_chars = render_braille(&gray, frame.width, frame.height, char_w, char_h, 128, false);
+    let braille_chars =
+        render_braille(&gray, frame.width, frame.height, char_w, char_h, 128, false);
 
     // Verify output dimensions
     assert_eq!(braille_chars.len(), (char_w * char_h) as usize);

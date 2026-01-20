@@ -1,6 +1,8 @@
 //! PTY host module - spawns user's shell and relays I/O
 
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize as PortablePtySize};
+use portable_pty::{
+    Child, CommandBuilder, MasterPty, PtySize as PortablePtySize, native_pty_system,
+};
 use std::io::{Read, Write};
 
 /// Error type for PTY operations

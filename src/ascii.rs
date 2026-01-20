@@ -200,14 +200,30 @@ pub const BRAILLE_BASE: char = '\u{2800}';
 /// The corresponding braille character (U+2800 to U+28FF)
 pub fn grid_to_braille(grid: [[bool; 4]; 2]) -> char {
     let mut code = 0u8;
-    if grid[0][0] { code |= 0x01; }
-    if grid[0][1] { code |= 0x02; }
-    if grid[0][2] { code |= 0x04; }
-    if grid[0][3] { code |= 0x40; }
-    if grid[1][0] { code |= 0x08; }
-    if grid[1][1] { code |= 0x10; }
-    if grid[1][2] { code |= 0x20; }
-    if grid[1][3] { code |= 0x80; }
+    if grid[0][0] {
+        code |= 0x01;
+    }
+    if grid[0][1] {
+        code |= 0x02;
+    }
+    if grid[0][2] {
+        code |= 0x04;
+    }
+    if grid[0][3] {
+        code |= 0x40;
+    }
+    if grid[1][0] {
+        code |= 0x08;
+    }
+    if grid[1][1] {
+        code |= 0x10;
+    }
+    if grid[1][2] {
+        code |= 0x20;
+    }
+    if grid[1][3] {
+        code |= 0x80;
+    }
     char::from_u32(BRAILLE_BASE as u32 + code as u32).unwrap_or(BRAILLE_BASE)
 }
 
@@ -563,7 +579,12 @@ pub fn downsample_colors_into(
     let img_width = frame.width;
     let img_height = frame.height;
 
-    if char_width == 0 || char_height == 0 || img_width == 0 || img_height == 0 || frame.data.is_empty() {
+    if char_width == 0
+        || char_height == 0
+        || img_width == 0
+        || img_height == 0
+        || frame.data.is_empty()
+    {
         return 0;
     }
 
@@ -752,4 +773,3 @@ pub fn apply_edge_detection(gray: &[u8], width: u32, height: u32) -> Vec<u8> {
 
     edges
 }
-

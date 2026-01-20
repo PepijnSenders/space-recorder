@@ -54,7 +54,12 @@ impl AsciiFrame {
     }
 
     /// Create a frame with characters and colors.
-    pub fn from_chars_colored(chars: Vec<char>, colors: Vec<CellColor>, width: u16, height: u16) -> Self {
+    pub fn from_chars_colored(
+        chars: Vec<char>,
+        colors: Vec<CellColor>,
+        width: u16,
+        height: u16,
+    ) -> Self {
         Self {
             chars,
             colors: Some(colors),

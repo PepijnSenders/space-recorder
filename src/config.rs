@@ -74,11 +74,10 @@ impl Config {
                 path: path.clone(),
                 source: e,
             })?;
-            let config: Config =
-                toml::from_str(&content).map_err(|e| ConfigError::ParseError {
-                    path: path.clone(),
-                    source: e,
-                })?;
+            let config: Config = toml::from_str(&content).map_err(|e| ConfigError::ParseError {
+                path: path.clone(),
+                source: e,
+            })?;
             Ok(config)
         } else {
             Ok(Config::default())
@@ -103,10 +102,20 @@ impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConfigError::IoError { path, source } => {
-                write!(f, "Failed to read config file '{}': {}", path.display(), source)
+                write!(
+                    f,
+                    "Failed to read config file '{}': {}",
+                    path.display(),
+                    source
+                )
             }
             ConfigError::ParseError { path, source } => {
-                write!(f, "Failed to parse config file '{}': {}", path.display(), source)
+                write!(
+                    f,
+                    "Failed to parse config file '{}': {}",
+                    path.display(),
+                    source
+                )
             }
         }
     }

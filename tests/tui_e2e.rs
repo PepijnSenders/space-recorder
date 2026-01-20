@@ -12,8 +12,8 @@
 //! The tests verify component integration and event handling logic.
 
 use space_recorder::ascii::CharSet;
-use space_recorder::camera::{list_devices, CameraCapture, CameraSettings};
-use space_recorder::pty::{select_shell, PtyHost, PtySize};
+use space_recorder::camera::{CameraCapture, CameraSettings, list_devices};
+use space_recorder::pty::{PtyHost, PtySize, select_shell};
 use space_recorder::terminal::{
     AsciiFrame, CameraModal, ModalPosition, ModalSize, PtyBuffer, RawModeGuard, StatusBar, Tui,
 };
@@ -82,7 +82,9 @@ fn test_ascii_frame_display_in_modal() {
     modal.visible = true;
 
     // Create a test ASCII frame
-    let chars: Vec<char> = (0..200).map(|i| if i % 2 == 0 { '#' } else { '.' }).collect();
+    let chars: Vec<char> = (0..200)
+        .map(|i| if i % 2 == 0 { '#' } else { '.' })
+        .collect();
     let frame = AsciiFrame::from_chars(chars, 20, 10);
     modal.set_frame(frame);
 
@@ -214,7 +216,10 @@ fn test_camera_capture_provides_frames() {
     }
 
     println!("Received {} frames in 1 second", frame_count);
-    assert!(frame_count >= 10, "Should receive at least 10 frames in 1 second");
+    assert!(
+        frame_count >= 10,
+        "Should receive at least 10 frames in 1 second"
+    );
 
     camera.stop();
 }
@@ -239,7 +244,10 @@ fn test_modal_can_receive_ascii_frames() {
         thread::sleep(frame_interval);
     }
 
-    assert!(frames_received >= 7, "Should receive ~7-8 frames in 0.5s at 15fps");
+    assert!(
+        frames_received >= 7,
+        "Should receive ~7-8 frames in 0.5s at 15fps"
+    );
 }
 
 // ====================
@@ -323,23 +331,38 @@ fn test_all_hotkeys_in_sequence() {
     let status_bar = StatusBar::new();
 
     // Initial state
-    assert_eq!(status_bar.format(&modal), " cam:off | bottom-right | small | standard ");
+    assert_eq!(
+        status_bar.format(&modal),
+        " cam:off | bottom-right | small | standard "
+    );
 
     // Toggle on
     modal.toggle();
-    assert_eq!(status_bar.format(&modal), " cam:on | bottom-right | small | standard ");
+    assert_eq!(
+        status_bar.format(&modal),
+        " cam:on | bottom-right | small | standard "
+    );
 
     // Change position
     modal.cycle_position();
-    assert_eq!(status_bar.format(&modal), " cam:on | bottom-left | small | standard ");
+    assert_eq!(
+        status_bar.format(&modal),
+        " cam:on | bottom-left | small | standard "
+    );
 
     // Change size
     modal.cycle_size();
-    assert_eq!(status_bar.format(&modal), " cam:on | bottom-left | medium | standard ");
+    assert_eq!(
+        status_bar.format(&modal),
+        " cam:on | bottom-left | medium | standard "
+    );
 
     // Change charset
     modal.cycle_charset();
-    assert_eq!(status_bar.format(&modal), " cam:on | bottom-left | medium | blocks ");
+    assert_eq!(
+        status_bar.format(&modal),
+        " cam:on | bottom-left | medium | blocks "
+    );
 }
 
 // ====================
@@ -371,7 +394,10 @@ fn test_pty_resize() {
     // Shell should still be running
     let (_, mut pty_split) = pty.split();
     let status = pty_split.try_wait().expect("Should check shell status");
-    assert!(status.is_none(), "Shell should still be running after resize");
+    assert!(
+        status.is_none(),
+        "Shell should still be running after resize"
+    );
 
     pty_split.kill().expect("Should kill shell");
 }
@@ -586,7 +612,10 @@ fn test_pty_buffer_performance() {
     let elapsed = start.elapsed();
 
     println!("Appended 1000 lines in {:?}", elapsed);
-    assert!(elapsed < Duration::from_millis(100), "Buffer should be fast");
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "Buffer should be fast"
+    );
 }
 
 #[test]
@@ -603,5 +632,8 @@ fn test_modal_state_update_performance() {
     let elapsed = start.elapsed();
 
     println!("1000 modal updates in {:?}", elapsed);
-    assert!(elapsed < Duration::from_millis(10), "Modal updates should be instant");
+    assert!(
+        elapsed < Duration::from_millis(10),
+        "Modal updates should be instant"
+    );
 }

@@ -71,10 +71,7 @@ pub(crate) fn install_panic_hook() {
         // Restore terminal before showing panic message
         if RAW_MODE_ACTIVE.load(Ordering::SeqCst) {
             // Leave alternate screen first
-            let _ = crossterm::execute!(
-                io::stdout(),
-                crossterm::terminal::LeaveAlternateScreen,
-            );
+            let _ = crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen,);
             let _ = disable_raw_mode();
             RAW_MODE_ACTIVE.store(false, Ordering::SeqCst);
         }

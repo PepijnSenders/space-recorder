@@ -1,9 +1,12 @@
 //! Camera capture module for webcam access and frame capture.
 
+use nokhwa::Camera;
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::query;
-use nokhwa::utils::{ApiBackend, CameraFormat, CameraIndex, FrameFormat as NokhwaFrameFormat, RequestedFormat, RequestedFormatType};
-use nokhwa::Camera;
+use nokhwa::utils::{
+    ApiBackend, CameraFormat, CameraIndex, FrameFormat as NokhwaFrameFormat, RequestedFormat,
+    RequestedFormatType,
+};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -142,10 +145,17 @@ impl fmt::Display for CameraError {
             CameraError::QueryFailed(msg) => write!(f, "Failed to query cameras: {}", msg),
             CameraError::OpenFailed(msg) => write!(f, "Failed to open camera: {}", msg),
             CameraError::PermissionDenied => {
-                write!(f, "Camera permission denied. On macOS, grant access in System Settings > Privacy & Security > Camera")
+                write!(
+                    f,
+                    "Camera permission denied. On macOS, grant access in System Settings > Privacy & Security > Camera"
+                )
             }
             CameraError::DeviceNotFound(index) => {
-                write!(f, "Camera device {} not found. Run 'list-cameras' to see available devices", index)
+                write!(
+                    f,
+                    "Camera device {} not found. Run 'list-cameras' to see available devices",
+                    index
+                )
             }
             CameraError::StreamFailed(msg) => write!(f, "Failed to start camera stream: {}", msg),
             CameraError::AlreadyRunning => write!(f, "Capture thread is already running"),
@@ -305,13 +315,19 @@ impl CameraCapture {
             let format_attempts: Vec<RequestedFormat> = vec![
                 // Try NV12 first (native macOS format)
                 RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(CameraFormat::new(
-                    nokhwa::utils::Resolution::new(settings.resolution.width, settings.resolution.height),
+                    nokhwa::utils::Resolution::new(
+                        settings.resolution.width,
+                        settings.resolution.height,
+                    ),
                     NokhwaFrameFormat::NV12,
                     settings.fps,
                 ))),
                 // Try MJPEG (widely supported, good compression)
                 RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(CameraFormat::new(
-                    nokhwa::utils::Resolution::new(settings.resolution.width, settings.resolution.height),
+                    nokhwa::utils::Resolution::new(
+                        settings.resolution.width,
+                        settings.resolution.height,
+                    ),
                     NokhwaFrameFormat::MJPEG,
                     settings.fps,
                 ))),
@@ -425,7 +441,9 @@ impl CameraCapture {
                 if let Some(h) = self.capture_thread.take() {
                     let _ = h.join();
                 }
-                Err(CameraError::StreamFailed("Capture thread terminated unexpectedly".to_string()))
+                Err(CameraError::StreamFailed(
+                    "Capture thread terminated unexpectedly".to_string(),
+                ))
             }
         }
     }
@@ -459,7 +477,9 @@ impl CameraCapture {
 
     /// Check if the capture thread is currently running.
     pub fn is_running(&self) -> bool {
-        self.capture_thread.as_ref().is_some_and(|h| !h.is_finished())
+        self.capture_thread
+            .as_ref()
+            .is_some_and(|h| !h.is_finished())
     }
 }
 
@@ -562,10 +582,7 @@ mod tests {
 
     #[test]
     fn test_camera_error_display() {
-        assert_eq!(
-            format!("{}", CameraError::NoDevices),
-            "No cameras found"
-        );
+        assert_eq!(format!("{}", CameraError::NoDevices), "No cameras found");
         assert_eq!(
             format!("{}", CameraError::QueryFailed("test".to_string())),
             "Failed to query cameras: test"
