@@ -344,9 +344,12 @@ fn run_visual_test(config: VisualTestConfig) {
 }
 
 /// Macro to define a visual test case.
+/// These tests require local test images and are ignored by default.
+/// Run with: cargo test -- --ignored
 macro_rules! visual_test {
     ($name:ident, $image:literal, $charset:expr, $width:literal, $height:literal) => {
         #[test]
+        #[ignore = "requires test images in tests/fixtures/images/"]
         fn $name() {
             run_visual_test(VisualTestConfig {
                 image_name: $image,
@@ -359,6 +362,7 @@ macro_rules! visual_test {
     };
     ($name:ident, $image:literal, $charset:expr, $width:literal, $height:literal, invert) => {
         #[test]
+        #[ignore = "requires test images in tests/fixtures/images/"]
         fn $name() {
             run_visual_test(VisualTestConfig {
                 image_name: $image,
@@ -470,6 +474,7 @@ visual_test!(
 // =============================================================================
 
 #[test]
+#[ignore = "requires test images"]
 fn generate_baseline_report() {
     // Only run when explicitly requested
     if std::env::var("GENERATE_REPORT").is_err() {
@@ -510,8 +515,9 @@ fn generate_baseline_report() {
 }
 
 /// Generate HTML files for visual comparison with colors.
-/// Run with: GENERATE_HTML=1 cargo test generate_html_preview -- --nocapture
+/// Run with: GENERATE_HTML=1 cargo test generate_html_preview -- --nocapture --ignored
 #[test]
+#[ignore = "requires test images"]
 fn generate_html_preview() {
     if std::env::var("GENERATE_HTML").is_err() {
         return;
@@ -635,8 +641,9 @@ fn generate_html_preview() {
 }
 
 /// Compare rendering methods: standard charset and braille, with gamma and contrast.
-/// Run with: COMPARE_GAMMA=1 cargo test compare_gamma_correction -- --nocapture
+/// Run with: COMPARE_GAMMA=1 cargo test compare_gamma_correction -- --nocapture --ignored
 #[test]
+#[ignore = "requires test images"]
 fn compare_gamma_correction() {
     if std::env::var("COMPARE_GAMMA").is_err() {
         return;
@@ -852,8 +859,9 @@ fn compare_gamma_correction() {
 }
 
 /// Compare different dithering methods.
-/// Run with: COMPARE_DITHER=1 cargo test compare_dithering -- --nocapture
+/// Run with: COMPARE_DITHER=1 cargo test compare_dithering -- --nocapture --ignored
 #[test]
+#[ignore = "requires test images"]
 fn compare_dithering() {
     if std::env::var("COMPARE_DITHER").is_err() {
         return;
@@ -966,8 +974,9 @@ fn compare_dithering() {
 }
 
 /// Compare structure-aware vs standard rendering.
-/// Run with: COMPARE_STRUCTURE=1 cargo test compare_structure_aware -- --nocapture
+/// Run with: COMPARE_STRUCTURE=1 cargo test compare_structure_aware -- --nocapture --ignored
 #[test]
+#[ignore = "requires test images"]
 fn compare_structure_aware() {
     if std::env::var("COMPARE_STRUCTURE").is_err() {
         return;
@@ -1100,8 +1109,9 @@ fn compare_structure_aware() {
 }
 
 /// Compare downsampling methods.
-/// Run with: COMPARE_DOWNSAMPLE=1 cargo test compare_downsampling -- --nocapture
+/// Run with: COMPARE_DOWNSAMPLE=1 cargo test compare_downsampling -- --nocapture --ignored
 #[test]
+#[ignore = "requires test images"]
 fn compare_downsampling() {
     if std::env::var("COMPARE_DOWNSAMPLE").is_err() {
         return;
@@ -1210,8 +1220,9 @@ fn compare_downsampling() {
 }
 
 /// Analyze current rendering issues and print diagnostic info.
-/// Run with: ANALYZE=1 cargo test analyze_rendering -- --nocapture
+/// Run with: ANALYZE=1 cargo test analyze_rendering -- --nocapture --ignored
 #[test]
+#[ignore = "requires test images"]
 fn analyze_rendering() {
     if std::env::var("ANALYZE").is_err() {
         return;
