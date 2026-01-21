@@ -2,7 +2,9 @@
 
 ASCII camera overlay for terminal streaming. A TUI app that renders your webcam as ASCII art while hosting a fully functional shell.
 
-![Demo](demo.gif)
+<p align="center">
+  <img src="demo.gif" alt="Demo" />
+</p>
 
 ## Features
 
