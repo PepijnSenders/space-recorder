@@ -143,6 +143,175 @@ pub fn downsample_into(
     output_size
 }
 
+/// Downsample with local contrast preservation.
+///
+/// Instead of simple averaging, this method preserves local contrast by
+/// computing both average and standard deviation within each cell, then
+/// adjusting the output to maintain perceived contrast.
+///
+/// This produces sharper-looking results for images with fine detail,
+/// at the cost of slightly higher computational overhead.
+///
+/// # Arguments
+/// * `gray` - Grayscale pixel data (one byte per pixel, row-major order)
+/// * `img_width` - Width of the source image in pixels
+/// * `img_height` - Height of the source image in pixels
+/// * `char_width` - Desired output width in characters
+/// * `char_height` - Desired output height in characters
+/// * `contrast_boost` - Contrast enhancement factor (1.0 = normal, 1.5 = boosted)
+///
+/// # Returns
+/// A vector of brightness values (0-255), one per character cell.
+pub fn downsample_contrast(
+    gray: &[u8],
+    img_width: u32,
+    img_height: u32,
+    char_width: u16,
+    char_height: u16,
+    contrast_boost: f32,
+) -> Vec<u8> {
+    if char_width == 0 || char_height == 0 || img_width == 0 || img_height == 0 || gray.is_empty() {
+        return Vec::new();
+    }
+
+    let cell_w = img_width as f32 / char_width as f32;
+    let cell_h = img_height as f32 / char_height as f32;
+
+    let mut result = Vec::with_capacity((char_width as usize) * (char_height as usize));
+
+    // First pass: compute global average for contrast reference
+    let global_avg: f32 = gray.iter().map(|&b| b as f32).sum::<f32>() / gray.len() as f32;
+
+    for cy in 0..char_height {
+        for cx in 0..char_width {
+            let start_x = (cx as f32 * cell_w) as u32;
+            let end_x = ((cx + 1) as f32 * cell_w) as u32;
+            let start_y = (cy as f32 * cell_h) as u32;
+            let end_y = ((cy + 1) as f32 * cell_h) as u32;
+
+            let mut sum = 0u32;
+            let mut min_val = 255u8;
+            let mut max_val = 0u8;
+            let mut count = 0u32;
+
+            for py in start_y..end_y {
+                for px in start_x..end_x {
+                    let idx = (py * img_width + px) as usize;
+                    if idx < gray.len() {
+                        let val = gray[idx];
+                        sum += val as u32;
+                        min_val = min_val.min(val);
+                        max_val = max_val.max(val);
+                        count += 1;
+                    }
+                }
+            }
+
+            if count == 0 {
+                result.push(0);
+                continue;
+            }
+
+            let avg = (sum as f32) / (count as f32);
+            let local_contrast = (max_val - min_val) as f32;
+
+            // Boost contrast around the local average
+            // Higher local_contrast means more detail to preserve
+            let contrast_factor = if local_contrast > 20.0 {
+                contrast_boost
+            } else {
+                1.0
+            };
+
+            // Apply contrast enhancement relative to global average
+            let enhanced = global_avg + (avg - global_avg) * contrast_factor;
+            let clamped = enhanced.clamp(0.0, 255.0) as u8;
+
+            result.push(clamped);
+        }
+    }
+
+    result
+}
+
+/// Downsample using local min-max for maximum contrast preservation.
+///
+/// This aggressive method uses the local range (min-max) to map brightness,
+/// making edges and details pop. Best for high-contrast scenes or when
+/// detail preservation is more important than accurate brightness.
+///
+/// # Arguments
+/// * `gray` - Grayscale pixel data
+/// * `img_width` - Width of the source image in pixels
+/// * `img_height` - Height of the source image in pixels
+/// * `char_width` - Desired output width in characters
+/// * `char_height` - Desired output height in characters
+/// * `edge_bias` - How much to favor high-contrast pixels (0.0-1.0)
+///
+/// # Returns
+/// A vector of brightness values (0-255), one per character cell.
+pub fn downsample_edge_preserve(
+    gray: &[u8],
+    img_width: u32,
+    img_height: u32,
+    char_width: u16,
+    char_height: u16,
+    edge_bias: f32,
+) -> Vec<u8> {
+    if char_width == 0 || char_height == 0 || img_width == 0 || img_height == 0 || gray.is_empty() {
+        return Vec::new();
+    }
+
+    let cell_w = img_width as f32 / char_width as f32;
+    let cell_h = img_height as f32 / char_height as f32;
+    let edge_bias = edge_bias.clamp(0.0, 1.0);
+
+    let mut result = Vec::with_capacity((char_width as usize) * (char_height as usize));
+
+    for cy in 0..char_height {
+        for cx in 0..char_width {
+            let start_x = (cx as f32 * cell_w) as u32;
+            let end_x = ((cx + 1) as f32 * cell_w) as u32;
+            let start_y = (cy as f32 * cell_h) as u32;
+            let end_y = ((cy + 1) as f32 * cell_h) as u32;
+
+            let mut sum = 0u32;
+            let mut min_val = 255u8;
+            let mut max_val = 0u8;
+            let mut count = 0u32;
+
+            for py in start_y..end_y {
+                for px in start_x..end_x {
+                    let idx = (py * img_width + px) as usize;
+                    if idx < gray.len() {
+                        let val = gray[idx];
+                        sum += val as u32;
+                        min_val = min_val.min(val);
+                        max_val = max_val.max(val);
+                        count += 1;
+                    }
+                }
+            }
+
+            if count == 0 {
+                result.push(0);
+                continue;
+            }
+
+            let avg = (sum / count) as u8;
+
+            // Blend between average and edge-biased value
+            // Edge bias pushes toward the more extreme value (min or max)
+            let edge_val = if avg > 128 { max_val } else { min_val };
+            let blended = (avg as f32 * (1.0 - edge_bias) + edge_val as f32 * edge_bias) as u8;
+
+            result.push(blended);
+        }
+    }
+
+    result
+}
+
 /// Downsample an RGB frame to get average colors per character cell.
 ///
 /// Each cell's color is the average of all pixels in that cell area.

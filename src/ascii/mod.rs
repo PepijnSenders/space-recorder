@@ -27,10 +27,19 @@ mod mapping;
 // Re-export all public items for backwards compatibility
 pub use charset::{CharSet, BLOCKS_CHARSET, MINIMAL_CHARSET, STANDARD_CHARSET};
 pub use dimensions::{calculate_dimensions, calculate_dimensions_with_aspect, DEFAULT_CHAR_ASPECT_RATIO};
-pub use downsample::{downsample, downsample_colors_into, downsample_into, CellColor};
-pub use edges::apply_edge_detection;
+pub use downsample::{
+    downsample, downsample_colors_into, downsample_contrast, downsample_edge_preserve,
+    downsample_into, CellColor,
+};
+pub use edges::{
+    apply_edge_detection, map_structure_aware, EdgeDirection, StructureCharset,
+    STRUCTURE_CHARSET, STRUCTURE_CHARSET_ASCII,
+};
 pub use grayscale::{to_grayscale, to_grayscale_into};
-pub use mapping::{map_to_chars, map_to_chars_into};
+pub use mapping::{
+    gamma_correct, map_to_chars, map_to_chars_dithered, map_to_chars_gamma,
+    map_to_chars_gamma_into, map_to_chars_into, map_to_chars_ordered_dither, GAMMA,
+};
 
 // Re-export braille functions at the module level for convenience
 pub use braille::render as render_braille;
