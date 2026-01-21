@@ -6,7 +6,7 @@
 use crossterm::event::{Event, EventStream};
 use futures::StreamExt;
 use std::io::Write;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use crate::ascii;
@@ -53,6 +53,12 @@ pub async fn run(
     let mut prev_modal_position = camera_modal.position;
     let mut prev_modal_visible = camera_modal.visible;
 
+    // Track last activity to pause modal rendering while terminal is actively changing
+    // This prevents cursor position conflicts and visual artifacts from scrolling
+    let mut last_activity: Option<Instant> = None;
+    const ACTIVITY_PAUSE_MS: u128 = 100; // Short pause after any terminal activity
+    let mut modal_hidden_for_activity = false;
+
     loop {
         // Check if shell has exited (non-blocking)
         if let Some(_status) = pty.try_wait()? {
@@ -83,6 +89,18 @@ pub async fn run(
                                     }
                                     KeyAction::Forward(bytes) => {
                                         pty.write(&bytes)?;
+                                        last_activity = Some(Instant::now());
+                                        // Hide modal on first activity to prevent scrolling artifacts
+                                        if camera_modal.visible && !modal_hidden_for_activity {
+                                            clear_modal_area(
+                                                &mut stdout,
+                                                camera_modal.size,
+                                                camera_modal.position,
+                                                term_cols,
+                                                term_rows,
+                                            )?;
+                                            modal_hidden_for_activity = true;
+                                        }
                                     }
                                     KeyAction::None => {
                                         // Key not recognized, ignore
@@ -123,6 +141,18 @@ pub async fn run(
                         // Write PTY output to stdout - colors and escape sequences pass through
                         stdout.write_all(&data)?;
                         stdout.flush()?;
+                        last_activity = Some(Instant::now());
+                        // Hide modal during output to prevent scrolling artifacts
+                        if camera_modal.visible && !modal_hidden_for_activity {
+                            clear_modal_area(
+                                &mut stdout,
+                                camera_modal.size,
+                                camera_modal.position,
+                                term_cols,
+                                term_rows,
+                            )?;
+                            modal_hidden_for_activity = true;
+                        }
                     }
                     None => {
                         // Channel closed - reader thread exited (shell closed)
@@ -133,7 +163,18 @@ pub async fn run(
 
             // Camera frame capture and rendering
             _ = camera_interval.tick() => {
+                // Skip rendering if terminal is actively changing (typing or output)
+                let activity_settled = last_activity
+                    .map(|t| t.elapsed().as_millis() > ACTIVITY_PAUSE_MS)
+                    .unwrap_or(true);
+
+                // Reset hidden flag when activity settles
+                if activity_settled {
+                    modal_hidden_for_activity = false;
+                }
+
                 if camera_modal.visible
+                    && activity_settled
                     && let Some(ref cam) = camera
                     && let Some(frame) = cam.get_frame()
                 {
@@ -164,7 +205,7 @@ pub async fn run(
                             frame.height,
                             modal_width,
                             modal_height,
-                            128, // threshold
+                            80, // threshold - lower = more dots = more detail
                             invert,
                         );
                         AsciiFrame::from_chars_colored(chars, terminal_colors, modal_width, modal_height)
@@ -179,7 +220,7 @@ pub async fn run(
                             modal_height,
                             &mut brightness_buffer,
                         );
-                        ascii::map_to_chars_into(
+                        ascii::map_to_chars_gamma_into(
                             &brightness_buffer,
                             camera_modal.charset.chars(),
                             invert,

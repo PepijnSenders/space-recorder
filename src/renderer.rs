@@ -39,7 +39,7 @@ pub fn clear_modal_area(
     let modal_rect = temp_modal.calculate_rect(container);
 
     let mut output = String::new();
-    output.push_str("\x1b[s"); // Save cursor
+    output.push_str("\x1b7"); // Save cursor (DEC)
     output.push_str("\x1b[?25l"); // Hide cursor
 
     // Fill entire modal area with spaces
@@ -53,7 +53,7 @@ pub fn clear_modal_area(
     }
 
     output.push_str("\x1b[?25h"); // Show cursor
-    output.push_str("\x1b[u"); // Restore cursor
+    output.push_str("\x1b8"); // Restore cursor (DEC)
 
     stdout.write_all(output.as_bytes())?;
     stdout.flush()?;
@@ -91,8 +91,8 @@ pub fn render_camera_overlay(
     // Build the output string with ANSI escape codes
     let mut output = String::new();
 
-    // Save cursor position
-    output.push_str("\x1b[s");
+    // Save cursor position (using DEC sequence - different slot than SCO \x1b[s)
+    output.push_str("\x1b7");
 
     // Hide cursor during rendering to reduce flicker
     output.push_str("\x1b[?25l");
@@ -139,8 +139,8 @@ pub fn render_camera_overlay(
     output.push_str("\x1b[0m"); // Reset all attributes
     output.push_str("\x1b[?25h");
 
-    // Restore cursor position
-    output.push_str("\x1b[u");
+    // Restore cursor position (using DEC sequence to match save)
+    output.push_str("\x1b8");
 
     // Write all at once for efficiency
     stdout.write_all(output.as_bytes())?;
