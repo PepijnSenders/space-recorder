@@ -72,7 +72,7 @@ All other keys pass through to the shell.
     --no-camera          Disable camera on start
 -p, --position <POS>     Position: top-left, top-right, bottom-left, bottom-right, center [default: bottom-right]
     --size <SIZE>        Size: small, medium, large, xlarge, huge [default: small]
-    --charset <CHARSET>  Character set: standard, blocks, minimal, braille [default: standard]
+    --charset <CHARSET>  Character set: standard, blocks, minimal, braille [default: blocks]
     --mirror             Mirror camera horizontally
     --invert             Invert brightness (for light terminals)
     --no-status          Hide status bar

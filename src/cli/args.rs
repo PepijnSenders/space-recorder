@@ -34,7 +34,7 @@ pub struct Args {
     pub size: Size,
 
     /// ASCII character set
-    #[arg(long, default_value = "standard")]
+    #[arg(long, default_value = "blocks")]
     pub charset: CharacterSet,
 
     /// Mirror camera horizontally
@@ -85,7 +85,7 @@ mod tests {
         assert!(!args.no_camera);
         assert_eq!(args.position, Position::BottomRight);
         assert_eq!(args.size, Size::Small);
-        assert_eq!(args.charset, CharacterSet::Standard);
+        assert_eq!(args.charset, CharacterSet::Blocks);
         assert!(!args.mirror);
         assert!(!args.invert);
         assert!(!args.no_status);
