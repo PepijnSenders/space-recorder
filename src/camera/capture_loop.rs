@@ -1,11 +1,11 @@
 //! Background capture thread implementation.
 
+use nokhwa::Camera;
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::{
     CameraFormat, CameraIndex, FrameFormat as NokhwaFrameFormat, RequestedFormat,
     RequestedFormatType,
 };
-use nokhwa::Camera;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};

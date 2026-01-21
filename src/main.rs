@@ -6,9 +6,9 @@ use tokio::sync::mpsc;
 
 use space_recorder::camera::{CameraCapture, CameraSettings, Resolution};
 use space_recorder::cli::{self, Args, Command};
+use space_recorder::event_loop;
 use space_recorder::pty::{self, PtyHost, PtySize};
 use space_recorder::terminal::{self, CameraModal, StatusBar};
-use space_recorder::event_loop;
 
 #[tokio::main]
 async fn main() {

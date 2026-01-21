@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 
 use crate::ascii;
 use crate::camera::CameraCapture;
-use crate::input::{handle_key_event, KeyAction};
+use crate::input::{KeyAction, handle_key_event};
 use crate::pty::{PtyHostSplit, PtySize};
 use crate::renderer::{clear_modal_area, render_camera_overlay};
 use crate::terminal::{AsciiFrame, CameraModal, CellColor, StatusBar};

@@ -28,10 +28,10 @@
 
 use image::GenericImageView;
 use space_recorder::ascii::{
+    BLOCKS_CHARSET, CellColor, CharSet, MINIMAL_CHARSET, STANDARD_CHARSET, STRUCTURE_CHARSET_ASCII,
     calculate_dimensions, downsample, downsample_colors_into, downsample_contrast,
     downsample_edge_preserve, map_structure_aware, map_to_chars, map_to_chars_dithered,
-    map_to_chars_gamma, map_to_chars_ordered_dither, render_braille, to_grayscale, CharSet,
-    CellColor, BLOCKS_CHARSET, MINIMAL_CHARSET, STANDARD_CHARSET, STRUCTURE_CHARSET_ASCII,
+    map_to_chars_gamma, map_to_chars_ordered_dither, render_braille, to_grayscale,
 };
 use space_recorder::camera::{Frame, FrameFormat};
 use std::fs;
@@ -78,12 +78,17 @@ fn load_test_image(name: &str) -> Frame {
 /// Render a frame to ASCII art (plain text, no colors).
 fn render_ascii(frame: &Frame, width: u16, height: u16, charset: &[char], invert: bool) -> String {
     // Calculate dimensions that fit within requested size
-    let (char_width, char_height) =
-        calculate_dimensions(frame.width, frame.height, width, height);
+    let (char_width, char_height) = calculate_dimensions(frame.width, frame.height, width, height);
 
     // Pipeline: grayscale -> downsample -> map to chars
     let grayscale = to_grayscale(frame);
-    let brightness = downsample(&grayscale, frame.width, frame.height, char_width, char_height);
+    let brightness = downsample(
+        &grayscale,
+        frame.width,
+        frame.height,
+        char_width,
+        char_height,
+    );
     let chars = map_to_chars(&brightness, charset, invert);
 
     // Convert to string with newlines
@@ -106,8 +111,7 @@ fn render_ascii_colored(
     charset: &[char],
     invert: bool,
 ) -> String {
-    let (char_width, char_height) =
-        calculate_dimensions(frame.width, frame.height, width, height);
+    let (char_width, char_height) = calculate_dimensions(frame.width, frame.height, width, height);
 
     // Get colors for each cell
     let mut colors: Vec<CellColor> = Vec::new();
@@ -115,7 +119,13 @@ fn render_ascii_colored(
 
     // Get characters
     let grayscale = to_grayscale(frame);
-    let brightness = downsample(&grayscale, frame.width, frame.height, char_width, char_height);
+    let brightness = downsample(
+        &grayscale,
+        frame.width,
+        frame.height,
+        char_width,
+        char_height,
+    );
     let chars = map_to_chars(&brightness, charset, invert);
 
     // Build ANSI-colored output
@@ -125,7 +135,10 @@ fn render_ascii_colored(
             result.push_str("\x1b[0m\n"); // Reset at end of line
         }
         // ANSI 24-bit true color foreground
-        result.push_str(&format!("\x1b[38;2;{};{};{}m{}", color.r, color.g, color.b, ch));
+        result.push_str(&format!(
+            "\x1b[38;2;{};{};{}m{}",
+            color.r, color.g, color.b, ch
+        ));
     }
     result.push_str("\x1b[0m"); // Final reset
     result
@@ -140,14 +153,19 @@ fn render_ascii_html(
     invert: bool,
     title: &str,
 ) -> String {
-    let (char_width, char_height) =
-        calculate_dimensions(frame.width, frame.height, width, height);
+    let (char_width, char_height) = calculate_dimensions(frame.width, frame.height, width, height);
 
     let mut colors: Vec<CellColor> = Vec::new();
     downsample_colors_into(frame, char_width, char_height, &mut colors);
 
     let grayscale = to_grayscale(frame);
-    let brightness = downsample(&grayscale, frame.width, frame.height, char_width, char_height);
+    let brightness = downsample(
+        &grayscale,
+        frame.width,
+        frame.height,
+        char_width,
+        char_height,
+    );
     let chars = map_to_chars(&brightness, charset, invert);
 
     let mut html = format!(
@@ -357,20 +375,8 @@ macro_rules! visual_test {
 // Face Photo Tests - Test facial feature recognition
 // =============================================================================
 
-visual_test!(
-    test_face_standard_40x20,
-    "face",
-    CharSet::Standard,
-    40,
-    20
-);
-visual_test!(
-    test_face_standard_80x24,
-    "face",
-    CharSet::Standard,
-    80,
-    24
-);
+visual_test!(test_face_standard_40x20, "face", CharSet::Standard, 40, 20);
+visual_test!(test_face_standard_80x24, "face", CharSet::Standard, 80, 24);
 visual_test!(test_face_blocks_40x20, "face", CharSet::Blocks, 40, 20);
 visual_test!(test_face_minimal_40x20, "face", CharSet::Minimal, 40, 20);
 
@@ -524,7 +530,14 @@ fn generate_html_preview() {
         let frame = load_test_image(image);
 
         for (_charset_enum, charset, name) in &charsets {
-            let html = render_ascii_html(&frame, 80, 30, charset, false, &format!("{} - {}", image, name));
+            let html = render_ascii_html(
+                &frame,
+                80,
+                30,
+                charset,
+                false,
+                &format!("{} - {}", image, name),
+            );
             let path = format!("tests/fixtures/html_preview/{}_{}.html", image, name);
             fs::write(&path, &html).expect("Failed to write HTML");
             println!("Generated: {}", path);
@@ -532,7 +545,8 @@ fn generate_html_preview() {
     }
 
     // Generate combined comparison page
-    let mut combined = String::from(r#"<!DOCTYPE html>
+    let mut combined = String::from(
+        r#"<!DOCTYPE html>
 <html>
 <head>
     <title>ASCII Rendering Visual Comparison</title>
@@ -557,7 +571,8 @@ fn generate_html_preview() {
 <body>
 <h1>ASCII Rendering Visual Comparison</h1>
 <p>Generated by <code>GENERATE_HTML=1 cargo test generate_html_preview</code></p>
-"#);
+"#,
+    );
 
     for image in &images {
         combined.push_str(&format!("<h2>{}</h2>\n", image));
@@ -573,10 +588,19 @@ fn generate_html_preview() {
             let mut colors: Vec<CellColor> = Vec::new();
             downsample_colors_into(&frame, char_width, char_height, &mut colors);
             let grayscale = to_grayscale(&frame);
-            let brightness = downsample(&grayscale, frame.width, frame.height, char_width, char_height);
+            let brightness = downsample(
+                &grayscale,
+                frame.width,
+                frame.height,
+                char_width,
+                char_height,
+            );
             let chars = map_to_chars(&brightness, charset, false);
 
-            combined.push_str(&format!("<div class=\"card\"><h3>{} ({}x{})</h3><pre>", name, char_width, char_height));
+            combined.push_str(&format!(
+                "<div class=\"card\"><h3>{} ({}x{})</h3><pre>",
+                name, char_width, char_height
+            ));
             for (i, (ch, color)) in chars.iter().zip(colors.iter()).enumerate() {
                 if i > 0 && i % (char_width as usize) == 0 {
                     combined.push_str("</span>\n");
@@ -623,7 +647,8 @@ fn compare_gamma_correction() {
     let images = ["webcam_01", "webcam_02", "webcam_03", "webcam_04"];
     let charset = STANDARD_CHARSET;
 
-    let mut html = String::from(r#"<!DOCTYPE html>
+    let mut html = String::from(
+        r#"<!DOCTYPE html>
 <html>
 <head>
     <title>Webcam ASCII Rendering Comparison</title>
@@ -650,7 +675,8 @@ fn compare_gamma_correction() {
 <body>
 <h1>Webcam ASCII Rendering Comparison</h1>
 <p>Comparing: Linear vs Gamma (γ=2.2) vs Gamma+Contrast (1.4x) for Standard and Braille charsets.</p>
-"#);
+"#,
+    );
 
     for image in &images {
         let frame = load_test_image(image);
@@ -658,7 +684,8 @@ fn compare_gamma_correction() {
 
         let grayscale = to_grayscale(&frame);
         let brightness = downsample(&grayscale, frame.width, frame.height, w, h);
-        let brightness_contrast = downsample_contrast(&grayscale, frame.width, frame.height, w, h, 1.4);
+        let brightness_contrast =
+            downsample_contrast(&grayscale, frame.width, frame.height, w, h, 1.4);
 
         let mut colors: Vec<CellColor> = Vec::new();
         downsample_colors_into(&frame, w, h, &mut colors);
@@ -678,12 +705,25 @@ fn compare_gamma_correction() {
         let linear_chars = map_to_chars(&brightness, charset, false);
         html.push_str("<div class=\"card\"><h3>Linear</h3><pre>");
         for (i, (ch, color)) in linear_chars.iter().zip(colors.iter()).enumerate() {
-            if i > 0 && i % (w as usize) == 0 { html.push('\n'); }
-            let c = match *ch { '<' => "&lt;", '>' => "&gt;", '&' => "&amp;", _ => "" };
+            if i > 0 && i % (w as usize) == 0 {
+                html.push('\n');
+            }
+            let c = match *ch {
+                '<' => "&lt;",
+                '>' => "&gt;",
+                '&' => "&amp;",
+                _ => "",
+            };
             if c.is_empty() {
-                html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", color.r, color.g, color.b, ch));
+                html.push_str(&format!(
+                    "<span style=\"color:rgb({},{},{})\">{}</span>",
+                    color.r, color.g, color.b, ch
+                ));
             } else {
-                html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", color.r, color.g, color.b, c));
+                html.push_str(&format!(
+                    "<span style=\"color:rgb({},{},{})\">{}</span>",
+                    color.r, color.g, color.b, c
+                ));
             }
         }
         html.push_str("</pre></div>\n");
@@ -692,12 +732,25 @@ fn compare_gamma_correction() {
         let gamma_chars = map_to_chars_gamma(&brightness, charset, false);
         html.push_str("<div class=\"card\"><h3>Gamma (γ=2.2)</h3><pre>");
         for (i, (ch, color)) in gamma_chars.iter().zip(colors.iter()).enumerate() {
-            if i > 0 && i % (w as usize) == 0 { html.push('\n'); }
-            let c = match *ch { '<' => "&lt;", '>' => "&gt;", '&' => "&amp;", _ => "" };
+            if i > 0 && i % (w as usize) == 0 {
+                html.push('\n');
+            }
+            let c = match *ch {
+                '<' => "&lt;",
+                '>' => "&gt;",
+                '&' => "&amp;",
+                _ => "",
+            };
             if c.is_empty() {
-                html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", color.r, color.g, color.b, ch));
+                html.push_str(&format!(
+                    "<span style=\"color:rgb({},{},{})\">{}</span>",
+                    color.r, color.g, color.b, ch
+                ));
             } else {
-                html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", color.r, color.g, color.b, c));
+                html.push_str(&format!(
+                    "<span style=\"color:rgb({},{},{})\">{}</span>",
+                    color.r, color.g, color.b, c
+                ));
             }
         }
         html.push_str("</pre></div>\n");
@@ -706,12 +759,25 @@ fn compare_gamma_correction() {
         let gamma_contrast_chars = map_to_chars_gamma(&brightness_contrast, charset, false);
         html.push_str("<div class=\"card\"><h3>Gamma + Contrast 1.4x</h3><pre>");
         for (i, (ch, color)) in gamma_contrast_chars.iter().zip(colors.iter()).enumerate() {
-            if i > 0 && i % (w as usize) == 0 { html.push('\n'); }
-            let c = match *ch { '<' => "&lt;", '>' => "&gt;", '&' => "&amp;", _ => "" };
+            if i > 0 && i % (w as usize) == 0 {
+                html.push('\n');
+            }
+            let c = match *ch {
+                '<' => "&lt;",
+                '>' => "&gt;",
+                '&' => "&amp;",
+                _ => "",
+            };
             if c.is_empty() {
-                html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", color.r, color.g, color.b, ch));
+                html.push_str(&format!(
+                    "<span style=\"color:rgb({},{},{})\">{}</span>",
+                    color.r, color.g, color.b, ch
+                ));
             } else {
-                html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", color.r, color.g, color.b, c));
+                html.push_str(&format!(
+                    "<span style=\"color:rgb({},{},{})\">{}</span>",
+                    color.r, color.g, color.b, c
+                ));
             }
         }
         html.push_str("</pre></div>\n");
@@ -724,11 +790,17 @@ fn compare_gamma_correction() {
         html.push_str("<div class=\"card\"><h3>Original</h3><img src=\"../images/{}.jpg\" class=\"original\" style=\"visibility:hidden\"></div>\n");
 
         // Braille Linear
-        let braille_linear = render_braille(&grayscale, frame.width, frame.height, w, h, 128, false);
+        let braille_linear =
+            render_braille(&grayscale, frame.width, frame.height, w, h, 128, false);
         html.push_str("<div class=\"card\"><h3>Linear (thresh=128)</h3><pre class=\"braille\">");
         for (i, ch) in braille_linear.iter().enumerate() {
-            if i > 0 && i % (w as usize) == 0 { html.push('\n'); }
-            html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", colors[i].r, colors[i].g, colors[i].b, ch));
+            if i > 0 && i % (w as usize) == 0 {
+                html.push('\n');
+            }
+            html.push_str(&format!(
+                "<span style=\"color:rgb({},{},{})\">{}</span>",
+                colors[i].r, colors[i].g, colors[i].b, ch
+            ));
         }
         html.push_str("</pre></div>\n");
 
@@ -736,17 +808,37 @@ fn compare_gamma_correction() {
         let braille_low = render_braille(&grayscale, frame.width, frame.height, w, h, 80, false);
         html.push_str("<div class=\"card\"><h3>Low Threshold (80)</h3><pre class=\"braille\">");
         for (i, ch) in braille_low.iter().enumerate() {
-            if i > 0 && i % (w as usize) == 0 { html.push('\n'); }
-            html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", colors[i].r, colors[i].g, colors[i].b, ch));
+            if i > 0 && i % (w as usize) == 0 {
+                html.push('\n');
+            }
+            html.push_str(&format!(
+                "<span style=\"color:rgb({},{},{})\">{}</span>",
+                colors[i].r, colors[i].g, colors[i].b, ch
+            ));
         }
         html.push_str("</pre></div>\n");
 
         // Braille with contrast boost
-        let braille_contrast = render_braille(&brightness_contrast, frame.width, frame.height, w, h, 100, false);
-        html.push_str("<div class=\"card\"><h3>Contrast 1.4x (thresh=100)</h3><pre class=\"braille\">");
+        let braille_contrast = render_braille(
+            &brightness_contrast,
+            frame.width,
+            frame.height,
+            w,
+            h,
+            100,
+            false,
+        );
+        html.push_str(
+            "<div class=\"card\"><h3>Contrast 1.4x (thresh=100)</h3><pre class=\"braille\">",
+        );
         for (i, ch) in braille_contrast.iter().enumerate() {
-            if i > 0 && i % (w as usize) == 0 { html.push('\n'); }
-            html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", colors[i].r, colors[i].g, colors[i].b, ch));
+            if i > 0 && i % (w as usize) == 0 {
+                html.push('\n');
+            }
+            html.push_str(&format!(
+                "<span style=\"color:rgb({},{},{})\">{}</span>",
+                colors[i].r, colors[i].g, colors[i].b, ch
+            ));
         }
         html.push_str("</pre></div>\n");
 
@@ -772,7 +864,8 @@ fn compare_dithering() {
     let images = ["gradient", "face"];
     let charset = STANDARD_CHARSET;
 
-    let mut html = String::from(r#"<!DOCTYPE html>
+    let mut html = String::from(
+        r#"<!DOCTYPE html>
 <html>
 <head>
     <title>Dithering Comparison</title>
@@ -797,7 +890,8 @@ fn compare_dithering() {
 <body>
 <h1>Dithering Method Comparison</h1>
 <p>Dithering creates the illusion of more gray levels by distributing quantization error.</p>
-"#);
+"#,
+    );
 
     for image in &images {
         let frame = load_test_image(image);
@@ -811,9 +905,21 @@ fn compare_dithering() {
 
         // Different rendering methods
         let methods: Vec<(&str, Vec<char>, &str)> = vec![
-            ("No Dithering (gamma)", map_to_chars_gamma(&brightness, charset, false), "Sharp edges, visible banding"),
-            ("Floyd-Steinberg", map_to_chars_dithered(&brightness, w, h, charset, false, true), "Smooth gradients, organic noise"),
-            ("Ordered (Bayer 4x4)", map_to_chars_ordered_dither(&brightness, w, charset, false, true), "Regular pattern, fast"),
+            (
+                "No Dithering (gamma)",
+                map_to_chars_gamma(&brightness, charset, false),
+                "Sharp edges, visible banding",
+            ),
+            (
+                "Floyd-Steinberg",
+                map_to_chars_dithered(&brightness, w, h, charset, false, true),
+                "Smooth gradients, organic noise",
+            ),
+            (
+                "Ordered (Bayer 4x4)",
+                map_to_chars_ordered_dither(&brightness, w, charset, false, true),
+                "Regular pattern, fast",
+            ),
         ];
 
         html.push_str(&format!("<h2>{}</h2>\n", image));
@@ -829,11 +935,22 @@ fn compare_dithering() {
                 if i > 0 && i % (w as usize) == 0 {
                     html.push('\n');
                 }
-                let c = match *ch { '<' => "&lt;", '>' => "&gt;", '&' => "&amp;", _ => "" };
+                let c = match *ch {
+                    '<' => "&lt;",
+                    '>' => "&gt;",
+                    '&' => "&amp;",
+                    _ => "",
+                };
                 if c.is_empty() {
-                    html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", color.r, color.g, color.b, ch));
+                    html.push_str(&format!(
+                        "<span style=\"color:rgb({},{},{})\">{}</span>",
+                        color.r, color.g, color.b, ch
+                    ));
                 } else {
-                    html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", color.r, color.g, color.b, c));
+                    html.push_str(&format!(
+                        "<span style=\"color:rgb({},{},{})\">{}</span>",
+                        color.r, color.g, color.b, c
+                    ));
                 }
             }
             html.push_str(&format!("</pre><p class=\"note\">{}</p></div>\n", desc));
@@ -861,7 +978,8 @@ fn compare_structure_aware() {
     let images = ["geometry", "face"];
     let charset = STANDARD_CHARSET;
 
-    let mut html = String::from(r#"<!DOCTYPE html>
+    let mut html = String::from(
+        r#"<!DOCTYPE html>
 <html>
 <head>
     <title>Structure-Aware Character Selection</title>
@@ -886,7 +1004,8 @@ fn compare_structure_aware() {
 <body>
 <h1>Structure-Aware Character Selection</h1>
 <p>Structure-aware rendering picks characters that match edge direction, not just brightness.</p>
-"#);
+"#,
+    );
 
     for image in &images {
         let frame = load_test_image(image);
@@ -901,7 +1020,15 @@ fn compare_structure_aware() {
         // Standard gamma-corrected
         let standard_chars = map_to_chars_gamma(&brightness, charset, false);
         // Structure-aware
-        let structure_chars = map_structure_aware(&grayscale, frame.width, frame.height, w, h, &STRUCTURE_CHARSET_ASCII, true);
+        let structure_chars = map_structure_aware(
+            &grayscale,
+            frame.width,
+            frame.height,
+            w,
+            h,
+            &STRUCTURE_CHARSET_ASCII,
+            true,
+        );
 
         html.push_str(&format!("<h2>{}</h2>\n", image));
         html.push_str(&format!(
@@ -916,11 +1043,22 @@ fn compare_structure_aware() {
             if i > 0 && i % (w as usize) == 0 {
                 html.push('\n');
             }
-            let c = match *ch { '<' => "&lt;", '>' => "&gt;", '&' => "&amp;", _ => "" };
+            let c = match *ch {
+                '<' => "&lt;",
+                '>' => "&gt;",
+                '&' => "&amp;",
+                _ => "",
+            };
             if c.is_empty() {
-                html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", color.r, color.g, color.b, ch));
+                html.push_str(&format!(
+                    "<span style=\"color:rgb({},{},{})\">{}</span>",
+                    color.r, color.g, color.b, ch
+                ));
             } else {
-                html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", color.r, color.g, color.b, c));
+                html.push_str(&format!(
+                    "<span style=\"color:rgb({},{},{})\">{}</span>",
+                    color.r, color.g, color.b, c
+                ));
             }
         }
         html.push_str("</pre><p class=\"note\">Brightness-only character selection</p></div>\n");
@@ -931,11 +1069,23 @@ fn compare_structure_aware() {
             if i > 0 && i % (w as usize) == 0 {
                 html.push('\n');
             }
-            let c = match *ch { '<' => "&lt;", '>' => "&gt;", '&' => "&amp;", '\\' => "\\", _ => "" };
+            let c = match *ch {
+                '<' => "&lt;",
+                '>' => "&gt;",
+                '&' => "&amp;",
+                '\\' => "\\",
+                _ => "",
+            };
             if c.is_empty() {
-                html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", color.r, color.g, color.b, ch));
+                html.push_str(&format!(
+                    "<span style=\"color:rgb({},{},{})\">{}</span>",
+                    color.r, color.g, color.b, ch
+                ));
             } else {
-                html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", color.r, color.g, color.b, c));
+                html.push_str(&format!(
+                    "<span style=\"color:rgb({},{},{})\">{}</span>",
+                    color.r, color.g, color.b, c
+                ));
             }
         }
         html.push_str("</pre><p class=\"note\">Uses |-/\\ for edges</p></div>\n");
@@ -962,7 +1112,8 @@ fn compare_downsampling() {
     let images = ["face", "geometry"];
     let charset = STANDARD_CHARSET;
 
-    let mut html = String::from(r#"<!DOCTYPE html>
+    let mut html = String::from(
+        r#"<!DOCTYPE html>
 <html>
 <head>
     <title>Downsampling Method Comparison</title>
@@ -987,7 +1138,8 @@ fn compare_downsampling() {
 <body>
 <h1>Downsampling Method Comparison</h1>
 <p>Different downsampling methods affect detail preservation and contrast.</p>
-"#);
+"#,
+    );
 
     for image in &images {
         let frame = load_test_image(image);
@@ -1005,7 +1157,11 @@ fn compare_downsampling() {
 
         let methods: Vec<(&str, &[u8], &str)> = vec![
             ("Standard (average)", &standard, "Simple averaging"),
-            ("Contrast Boosted (1.3x)", &contrast, "Enhances local contrast"),
+            (
+                "Contrast Boosted (1.3x)",
+                &contrast,
+                "Enhances local contrast",
+            ),
             ("Edge Preserve (0.3)", &edge, "Favors edge pixels"),
         ];
 
@@ -1023,11 +1179,22 @@ fn compare_downsampling() {
                 if i > 0 && i % (w as usize) == 0 {
                     html.push('\n');
                 }
-                let c = match *ch { '<' => "&lt;", '>' => "&gt;", '&' => "&amp;", _ => "" };
+                let c = match *ch {
+                    '<' => "&lt;",
+                    '>' => "&gt;",
+                    '&' => "&amp;",
+                    _ => "",
+                };
                 if c.is_empty() {
-                    html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", color.r, color.g, color.b, ch));
+                    html.push_str(&format!(
+                        "<span style=\"color:rgb({},{},{})\">{}</span>",
+                        color.r, color.g, color.b, ch
+                    ));
                 } else {
-                    html.push_str(&format!("<span style=\"color:rgb({},{},{})\">{}</span>", color.r, color.g, color.b, c));
+                    html.push_str(&format!(
+                        "<span style=\"color:rgb({},{},{})\">{}</span>",
+                        color.r, color.g, color.b, c
+                    ));
                 }
             }
             html.push_str(&format!("</pre><p class=\"note\">{}</p></div>\n", desc));

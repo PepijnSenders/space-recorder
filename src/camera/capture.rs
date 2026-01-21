@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use super::capture_loop::{run_capture_loop, CaptureCommand};
+use super::capture_loop::{CaptureCommand, run_capture_loop};
 use super::device::list_devices;
 use super::types::{CameraError, CameraSettings, Frame, Resolution};
 

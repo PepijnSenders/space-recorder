@@ -158,11 +158,7 @@ fn render_border(
     inner_y: u16,
 ) {
     // Top border
-    output.push_str(&format!(
-        "\x1b[{};{}H",
-        modal_rect.y + 1,
-        modal_rect.x + 1
-    ));
+    output.push_str(&format!("\x1b[{};{}H", modal_rect.y + 1, modal_rect.x + 1));
     output.push('┌');
     for _ in 0..inner_width {
         output.push('─');
@@ -187,11 +183,7 @@ fn render_border(
         // Left border
         output.push_str(&format!("\x1b[{};{}H│", y, modal_rect.x + 1));
         // Right border
-        output.push_str(&format!(
-            "\x1b[{};{}H│",
-            y,
-            modal_rect.x + modal_rect.width
-        ));
+        output.push_str(&format!("\x1b[{};{}H│", y, modal_rect.x + modal_rect.width));
     }
 }
 
@@ -217,8 +209,7 @@ fn render_frame_content(
     // transparency=80 -> threshold=153 (only draw very dark pixels)
     // transparency=100 -> threshold=0 (everything transparent)
     let max_brightness: u16 = 765; // 255 * 3
-    let brightness_threshold =
-        (max_brightness as u32 * (100 - transparency as u32) / 100) as u16;
+    let brightness_threshold = (max_brightness as u32 * (100 - transparency as u32) / 100) as u16;
 
     for (row, line) in lines.iter().enumerate().take(inner_height as usize) {
         let y = inner_y + row as u16 + 1; // +1 for 1-based ANSI coordinates
@@ -247,11 +238,7 @@ fn render_frame_content(
                         } else {
                             // Position cursor if needed
                             if need_reposition {
-                                output.push_str(&format!(
-                                    "\x1b[{};{}H",
-                                    y,
-                                    base_x + col as u16
-                                ));
+                                output.push_str(&format!("\x1b[{};{}H", y, base_x + col as u16));
                                 need_reposition = false;
                             }
                             // ANSI true color (24-bit): ESC[38;2;R;G;Bm for foreground

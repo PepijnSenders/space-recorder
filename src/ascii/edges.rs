@@ -83,19 +83,27 @@ fn analyze_gradient(gx: i32, gy: i32) -> (u8, EdgeDirection) {
         EdgeDirection::DiagonalUp
     };
 
-    (magnitude, if abs_gx > abs_gy * 2 {
-        EdgeDirection::Vertical
-    } else if abs_gy > abs_gx * 2 {
-        EdgeDirection::Horizontal
-    } else if (gx > 0) == (gy > 0) {
-        EdgeDirection::DiagonalDown
-    } else {
-        EdgeDirection::DiagonalUp
-    })
+    (
+        magnitude,
+        if abs_gx > abs_gy * 2 {
+            EdgeDirection::Vertical
+        } else if abs_gy > abs_gx * 2 {
+            EdgeDirection::Horizontal
+        } else if (gx > 0) == (gy > 0) {
+            EdgeDirection::DiagonalDown
+        } else {
+            EdgeDirection::DiagonalUp
+        },
+    )
 }
 
 /// Map brightness and edge info to a structure-aware character.
-fn get_structure_char(brightness: u8, direction: EdgeDirection, edge_strength: u8, charset: &StructureCharset) -> char {
+fn get_structure_char(
+    brightness: u8,
+    direction: EdgeDirection,
+    edge_strength: u8,
+    charset: &StructureCharset,
+) -> char {
     // Map brightness to 5 levels (0-4)
     let level = (brightness as usize * 4) / 255;
     let level = level.min(4);
@@ -274,11 +282,23 @@ pub fn map_structure_aware(
             } else {
                 0
             };
-            let brightness = if use_gamma { gamma_correct(brightness) } else { brightness };
+            let brightness = if use_gamma {
+                gamma_correct(brightness)
+            } else {
+                brightness
+            };
 
             // Average gradient for the cell
-            let avg_gx = if gradient_count > 0 { gx_sum / gradient_count as i32 } else { 0 };
-            let avg_gy = if gradient_count > 0 { gy_sum / gradient_count as i32 } else { 0 };
+            let avg_gx = if gradient_count > 0 {
+                gx_sum / gradient_count as i32
+            } else {
+                0
+            };
+            let avg_gy = if gradient_count > 0 {
+                gy_sum / gradient_count as i32
+            } else {
+                0
+            };
 
             let (edge_strength, direction) = analyze_gradient(avg_gx, avg_gy);
             let ch = get_structure_char(brightness, direction, edge_strength, charset);
